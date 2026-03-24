@@ -29,6 +29,7 @@ reservedWords =
   , "storage"
   , "int"
   , "bool"
+  , "unit"
   , "return"
   , "if"
   , "else"
@@ -59,6 +60,7 @@ parseType = parseRecordType <|> parsePrimitiveType
     parsePrimitiveType =
       (reserved "int" >> return TInt)
         <|> (reserved "bool" >> return TBool)
+        <|> (reserved "unit" >> return TUnit)
 
     parseRecordType :: Parser Type
     parseRecordType = do
@@ -84,7 +86,7 @@ operators :: [[Operator Parser Expr]]
 operators =
   [ [ Prefix (Not <$ symbol "!") ]
   , [ InfixL (Mul <$ symbol "*")
-    , InfixL (Div <$ symbol "/")
+    , InfixL (DSiv <$ symbol "/")
     , InfixL (Mod <$ symbol "%")
     ]
   , [ InfixL (Add <$ symbol "+")
@@ -103,9 +105,14 @@ operators =
 
 parseTerm :: Parser Expr
 parseTerm = do
-  base <- parseAtom
+  base <- parseAtomOrStorage
   fields <- many (symbol "." *> parseName)
   return (foldl FieldAccess base fields)
+
+parseAtomOrStorage :: Parser Expr
+parseAtomOrStorage =
+  parseStorageExpr
+    <|> parseAtom
 
 parseAtom :: Parser Expr
 parseAtom =
@@ -115,6 +122,11 @@ parseAtom =
     <|> parseInt
     <|> parseVar
     <|> parens parseExpr
+
+parseStorageExpr :: Parser Expr
+parseStorageExpr = do
+  _ <- reserved "storage"
+  return StorageExpr
 
 parseInt :: Parser Expr
 parseInt = CInt <$> lexeme L.decimal
@@ -210,9 +222,13 @@ parseAssignment = do
 
 parseLValue :: Parser LValue
 parseLValue = do
-  base <- parseName
+  base <- parseAssignableBase
   fields <- many (symbol "." *> parseName)
-  return (foldl LField (LVar base) fields)
+  return (foldl LField base fields)
+
+parseAssignableBase :: Parser LValue
+parseAssignableBase =
+  (reserved "storage" >> return LStorage) <|> (LVar <$> parseName)
 
 parseReturn :: Parser Stmt
 parseReturn = do

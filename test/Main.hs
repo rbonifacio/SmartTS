@@ -343,6 +343,30 @@ statementTests = testGroup "Statement Parsing"
               return ()
           _ -> assertFailure $ "Expected x.a.b assignment, got: " ++ show contract
 
+  , testCase "Storage expression read (storage.x)" $
+      parseSuccess "contract Test { storage: { x: int }; @entrypoint sr(): int { return storage.x; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "sr" [] TInt
+                (SequenceStmt
+                  [ReturnStmt (FieldAccess StorageExpr "x")])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected storage read, got: " ++ show contract
+
+  , testCase "Storage expression write (storage.x = ...)" $
+      parseSuccess "contract Test { storage: { x: int }; @entrypoint sw(): int { storage.x = 10; return storage.x; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "sw" [] TInt
+                (SequenceStmt
+                  [ AssignmentStmt (LField LStorage "x") (CInt 10)
+                  , ReturnStmt (FieldAccess StorageExpr "x")
+                  ])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected storage write, got: " ++ show contract
+
   , testCase "Var declaration + assignment to local var" $
       parseSuccess "contract Test { storage: { x: int }; @entrypoint v(): int { var y: int = 10; y = 11; return y; } }" $ \contract ->
         case contract of

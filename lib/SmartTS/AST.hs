@@ -28,6 +28,7 @@ type ReturnType = Type
 
 data Type = TInt
           | TBool
+          | TUnit
           | TRecord [(Name, Type)]
   deriving (Eq, Show)
 
@@ -35,6 +36,7 @@ type Name = String
 
 data Expr = CInt Int
           | CBool Bool
+          | StorageExpr
           | Var Name
           | FieldAccess Expr Name
           | And Expr Expr
@@ -60,7 +62,8 @@ type MethodBody = Stmt
 -- | What is allowed on the left-hand side of an assignment.
 -- Supports TypeScript-like record field paths: `x.a.b`.
 data LValue
-  = LVar Name
+  = LStorage
+  | LVar Name
   | LField LValue Name
   deriving (Eq, Show)
 

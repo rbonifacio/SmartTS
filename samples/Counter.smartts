@@ -1,0 +1,31 @@
+contract Counter {
+  storage: {
+    count: int,
+    enabled: bool
+  };
+
+  @originate
+  init(initialCount: int): unit {
+    var start: int = initialCount;
+    val isEnabled: bool = true;
+    storage.count = start;
+    storage.enabled = isEnabled;
+    return ();
+  }
+
+  @entrypoint
+  increment(by: int): int {
+    if (storage.enabled) {
+      storage.count = storage.count + by;
+    } else {
+      storage.count = storage.count;
+    }
+    return storage.count;
+  }
+
+  @entrypoint
+  setEnabled(value: bool): unit {
+    storage.enabled = value;
+    return ();
+  }
+}
