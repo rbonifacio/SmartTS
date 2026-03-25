@@ -86,7 +86,7 @@ operators :: [[Operator Parser Expr]]
 operators =
   [ [ Prefix (Not <$ symbol "!") ]
   , [ InfixL (Mul <$ symbol "*")
-    , InfixL (DSiv <$ symbol "/")
+    , InfixL (Div <$ symbol "/")
     , InfixL (Mod <$ symbol "%")
     ]
   , [ InfixL (Add <$ symbol "+")

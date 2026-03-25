@@ -86,9 +86,20 @@ New deployments use addresses shaped like **`KT1` + 16 hex characters + `_` + in
 |------|------|
 | `lib/SmartTS/AST.hs` | Abstract syntax |
 | `lib/SmartTS/Parser.hs` | Megaparsec grammar |
+| `lib/SmartTS/TypeCheck.hs` | Static type checking (see below) |
 | `lib/SmartTS/Interpreter.hs` | Evaluation and repository state |
 | `app/Main.hs` | CLI (`--originate` / `--call`) |
 | `samples/Counter.smartts` | Example contract |
+
+## Type checker
+
+SmartTS is **explicitly typed**: parameters, return types, `storage` fields, and every `var` / `val` carry a type. The checker (`SmartTS.TypeCheck`) verifies that expressions match those annotations; it does not implement polymorphism or full inference yet.
+
+**Full specification of the current rules** (contract checks, scoping, every expression and statement form, and known gaps) lives in **[docs/TYPECHECK.md](docs/TYPECHECK.md)**.
+
+**When it runs:** (1) after parsing `--source` on **originate**, (2) after loading `contracts/<ContractName>.smartts` on **call**, and (3) for **every** instance when rebuilding the repo from `state.json` (contract file re-checked; storage JSON decoded against the declared `storage:` record).
+
+**Interpreter:** Assumes type-checked source and typed storage; see the note at the end of [docs/TYPECHECK.md](docs/TYPECHECK.md) and the `SmartTS.Interpreter` module header.
 
 ## Example scenario: `Counter`
 
@@ -151,6 +162,8 @@ Then `increment` no longer changes `count` until you set `enabled` back to `true
 
 - **`tezos-sandbox/state.json`** — instances keyed by address (contract name + storage as JSON).
 - **`tezos-sandbox/contracts/Counter.smartts`** — copy of the source used when resolving calls.
+
+See **[Type checker](#type-checker)** above: on each command the repo’s contract files are re-checked and persisted storage is validated against the declared `storage:` shape before interpretation.
 
 ## License
 

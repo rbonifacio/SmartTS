@@ -1,3 +1,9 @@
+-- | Evaluation of SmartTS contracts.
+--
+-- The CLI runs "SmartTS.TypeCheck.typeCheckContract" on source before interpretation.
+-- Persisted storage is decoded with "jsonToExprByType" against the contract storage record.
+-- After those steps, expression shapes that contradict the static types are treated as
+-- internal bugs ("interpretBug") rather than user-facing "Left" errors.
 module SmartTS.Interpreter where
 
 import Data.Aeson (Value(..))
@@ -35,6 +41,11 @@ data Runtime = Runtime
   , rtLocals :: M.Map Name Binding
   }
   deriving (Eq, Show)
+
+-- | Impossible case after type checking and typed storage decode (see module header).
+interpretBug :: String -> a
+interpretBug msg =
+  error $ "SmartTS internal error (please report): " ++ msg
 
 -- | First 16 hex characters of SHA-256 (UTF-8 bytes of @sourceText@). Used in addresses and call-time checks.
 -- Implemented with the pure Haskell @SHA@ package (FIPS 180-2), no FFI.
@@ -127,6 +138,12 @@ jsonToExprUntyped (Object obj) = do
       ev <- jsonToExprUntyped v
       Right (toStringKey k, ev)
 jsonToExprUntyped _ = Left "Unsupported JSON value for SmartTS expression."
+
+-- | Decode persisted @storage@ JSON using the contract\'s declared storage record type.
+contractInstanceFromStorageValue :: Contract -> Value -> Either String ContractInstance
+contractInstanceFromStorageValue c v = do
+  st <- jsonToExprByType (TRecord (contractStorage c)) v
+  Right (ContractInstance (contractName c) st)
 
 bindArgsByName :: [FormalParameter] -> Value -> Either String (M.Map Name Expr)
 bindArgsByName params (Object obj) = do
@@ -260,7 +277,7 @@ execStmt rt (IfStmt cond thenS elseS) = do
       case elseS of
         Nothing -> Right (Nothing, rt)
         Just es -> execStmt rt es
-    _ -> Left "If condition must evaluate to bool."
+    _ -> interpretBug "if condition was not bool after type check"
 execStmt rt (WhileStmt cond body) = loop rt
   where
     loop cur = do
@@ -272,7 +289,7 @@ execStmt rt (WhileStmt cond body) = loop rt
           case ret of
             Just v -> Right (Just v, next)
             Nothing -> loop next
-        _ -> Left "While condition must evaluate to bool."
+        _ -> interpretBug "while condition was not bool after type check"
 
 execSequence :: Runtime -> [Stmt] -> Either String (Maybe Expr, Runtime)
 execSequence rt [] = Right (Nothing, rt)
@@ -290,14 +307,13 @@ evalExpr rt StorageExpr =
   case rtStorage rt of
     Nothing -> Right Unit
     Just s -> Right s
-evalExpr rt (Var n)
-  =
-    case M.lookup n (rtLocals rt) of
-      Just b -> Right (bindingValue b)
-      Nothing ->
-        case M.lookup n (rtParams rt) of
-          Just v -> Right v
-          Nothing -> Left ("Unknown variable: " ++ n)
+evalExpr rt (Var n) =
+  case M.lookup n (rtLocals rt) of
+    Just b -> Right (bindingValue b)
+    Nothing ->
+      case M.lookup n (rtParams rt) of
+        Just v -> Right v
+        Nothing -> interpretBug ("unknown variable `" ++ n ++ "` after type check")
 evalExpr rt (Record fields) = do
   fs <- mapM (\(k, e) -> (,) k <$> evalExpr rt e) fields
   Right (Record fs)
@@ -307,13 +323,13 @@ evalExpr rt (FieldAccess base fld) = do
     Record fs ->
       case lookup fld fs of
         Just v -> Right v
-        Nothing -> Left ("Missing field: " ++ fld)
-    _ -> Left "Field access base must be a record."
+        Nothing -> interpretBug ("missing record field `" ++ fld ++ "` after type check")
+    _ -> interpretBug "field access on non-record after type check"
 evalExpr rt (Not e) = do
   v <- evalExpr rt e
   case v of
     CBool b -> Right (CBool (not b))
-    _ -> Left "Expected bool for !"
+    _ -> interpretBug "operand of ! was not bool after type check"
 evalExpr rt (And a b) = boolBin rt a b (&&)
 evalExpr rt (Or a b) = boolBin rt a b (||)
 evalExpr rt (Add a b) = intBin rt a b (+)
@@ -346,11 +362,11 @@ assignLValue rt (LVar n) v =
               { rtLocals =
                   M.insert n (Binding True v) (rtLocals rt)
               }
-        else Left ("Cannot assign to immutable val: " ++ n)
+        else interpretBug ("assignment to immutable val `" ++ n ++ "` after type check")
     Nothing ->
       if M.member n (rtParams rt)
-        then Left ("Cannot assign to method argument: " ++ n)
-        else Left ("Unknown assignment target: " ++ n)
+        then interpretBug ("assignment to parameter `" ++ n ++ "` after type check")
+        else interpretBug ("unknown assignment target `" ++ n ++ "` after type check")
 assignLValue rt (LField lv fld) v = do
   (root, path) <- flattenLValue lv [fld]
   rootExpr <- resolveRootExpr rt root
@@ -372,12 +388,12 @@ resolveRootExpr rt (LVar n) =
     Just b -> Right (bindingValue b)
     Nothing ->
       case M.lookup n (rtParams rt) of
-        Just _ -> Left ("Cannot assign through argument: " ++ n)
-        Nothing -> Left ("Unknown assignment target: " ++ n)
-resolveRootExpr _ _ = Left "Invalid root assignment target."
+        Just _ -> interpretBug ("field update through parameter `" ++ n ++ "` after type check")
+        Nothing -> interpretBug ("unknown root for field update `" ++ n ++ "` after type check")
+resolveRootExpr _ _ = interpretBug "invalid root for field update"
 
 setFieldPath :: Expr -> [Name] -> Expr -> Either String Expr
-setFieldPath _ [] _ = Left "Empty field path."
+setFieldPath _ [] _ = interpretBug "empty field path in assignment"
 setFieldPath base [f] v = setField base f v
 setFieldPath base (f:fs) v = do
   child <- getOrCreateField base f
@@ -390,12 +406,12 @@ getOrCreateField (Record fields) f =
     Just v -> Right v
     Nothing -> Right (Record [])
 getOrCreateField Unit _ = Right (Record [])
-getOrCreateField _ _ = Left "Field assignment base must be a record."
+getOrCreateField _ _ = interpretBug "field path through non-record value after type check"
 
 setField :: Expr -> Name -> Expr -> Either String Expr
 setField (Record fields) f v = Right (Record (insertOrReplace f v fields))
 setField Unit f v = Right (Record [(f, v)])
-setField _ _ _ = Left "Field assignment base must be a record."
+setField _ _ _ = interpretBug "setField on non-record after type check"
 
 insertOrReplace :: Name -> Expr -> [(Name, Expr)] -> [(Name, Expr)]
 insertOrReplace k v [] = [(k, v)]
@@ -408,7 +424,7 @@ evalInt rt e = do
   v <- evalExpr rt e
   case v of
     CInt n -> Right n
-    _ -> Left "Expected int expression."
+    _ -> interpretBug "expected int subexpression after type check"
 
 intBin :: Runtime -> Expr -> Expr -> (Int -> Int -> Int) -> Either String Expr
 intBin rt a b op = do
@@ -422,7 +438,7 @@ boolBin rt a b op = do
   y <- evalExpr rt b
   case (x, y) of
     (CBool bx, CBool by) -> Right (CBool (op bx by))
-    _ -> Left "Expected bool expressions."
+    _ -> interpretBug "boolean operator on non-bool after type check"
 
 intCmp :: Runtime -> Expr -> Expr -> (Int -> Int -> Bool) -> Either String Expr
 intCmp rt a b op = do

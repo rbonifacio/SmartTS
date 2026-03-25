@@ -12,9 +12,10 @@ import System.Environment (getArgs)
 import System.Exit (die)
 import System.FilePath ((</>))
 
-import SmartTS.AST (Expr (..), contractName)
+import SmartTS.AST (contractName)
 import SmartTS.Interpreter
 import SmartTS.Parser
+import SmartTS.TypeCheck (typeCheckContract)
 
 data CliCmd
   = CmdOriginate
@@ -121,13 +122,19 @@ runOriginate repoDir sourcePath argsJsonStr = do
     case parseContractFromString source of
       Left e -> die ("Parse error: " ++ show e)
       Right c -> pure c
+  case typeCheckContract contract of
+    Left err -> die ("Type error: " ++ err)
+    Right () -> pure ()
   argsValue <-
     case eitherDecode (BL.fromStrict (toStrictUtf8 argsJsonStr)) of
       Left e -> die ("Invalid JSON for --args: " ++ e)
       Right v -> pure v
 
   persisted <- loadState repoDir
-  let repoState = fromPersistedState persisted
+  es <- resolveRepositoryState repoDir persisted
+  repoState <- case es of
+    Left err -> die ("Repository state: " ++ err)
+    Right ok -> pure ok
   (address, repoState') <-
     case originateWithJsonArgs repoState contract source argsValue of
       Left e -> die ("Originate failed: " ++ e)
@@ -144,7 +151,10 @@ runOriginate repoDir sourcePath argsJsonStr = do
 runCall :: FilePath -> String -> String -> String -> IO ()
 runCall repoDir address entrypoint argsJsonStr = do
   persisted <- loadState repoDir
-  let repoState = fromPersistedState persisted
+  es <- resolveRepositoryState repoDir persisted
+  repoState <- case es of
+    Left err -> die ("Repository state: " ++ err)
+    Right ok -> pure ok
   ci <-
     case M.lookup address repoState of
       Nothing -> die ("Unknown address: " ++ address)
@@ -166,6 +176,9 @@ runCall repoDir address entrypoint argsJsonStr = do
         case parseContractFromString source of
           Left e -> die ("Parse error: " ++ show e)
           Right c -> pure c
+      case typeCheckContract contract of
+        Left err -> die ("Type error: " ++ err)
+        Right () -> pure ()
 
       argsValue <-
         case eitherDecode (BL.fromStrict (toStrictUtf8 argsJsonStr)) of
@@ -194,15 +207,52 @@ toPersistedState repo =
       )
       repo
 
-fromPersistedState :: PersistedState -> RepositoryState
-fromPersistedState (PersistedState instancesMap) =
-  M.map
-    ( \pinst ->
-        ContractInstance
-          (persistedContractName pinst)
-          (either (const Unit) id (jsonToExprUntyped (persistedStorage pinst)))
-    )
-    instancesMap
+-- | Rebuild runtime instances from @state.json@: parse each @contracts\/\<Name\>.smartts@,
+-- type-check it, and decode storage JSON against the contract\'s storage record type.
+resolveRepositoryState :: FilePath -> PersistedState -> IO (Either String RepositoryState)
+resolveRepositoryState repoDir (PersistedState m)
+  | M.null m = return (Right M.empty)
+  | otherwise = go (M.toList m) M.empty
+  where
+    go [] acc = return (Right acc)
+    go ((addr, pinst) : rest) acc = do
+      let name = persistedContractName pinst
+          path = repoDir </> "contracts" </> name ++ ".smartts"
+      fileOk <- doesFileExist path
+      if not fileOk
+        then
+          return $
+            Left $
+              "Missing contract source for instance at address "
+                ++ addr
+                ++ " (expected file "
+                ++ path
+                ++ ")."
+        else do
+          src <- readFile path
+          case parseContractFromString src of
+            Left err ->
+              return $ Left $ "Parse error loading " ++ path ++ ": " ++ show err
+            Right c
+              | contractName c /= name ->
+                  return $
+                    Left $
+                      "Contract in " ++ path ++ " is named `" ++ contractName c ++ "` but state.json expects `" ++ name ++ "` for address " ++ addr ++ "."
+              | otherwise ->
+                  case typeCheckContract c of
+                    Left terr -> return $ Left $ "Type error in " ++ path ++ ": " ++ terr
+                    Right () ->
+                      case contractInstanceFromStorageValue c (persistedStorage pinst) of
+                        Left s ->
+                          return $
+                            Left $
+                              "Persisted storage for "
+                                ++ addr
+                                ++ " does not match contract `"
+                                ++ name
+                                ++ "` storage type: "
+                                ++ s
+                        Right ci -> go rest (M.insert addr ci acc)
 
 loadState :: FilePath -> IO PersistedState
 loadState repoDir = do

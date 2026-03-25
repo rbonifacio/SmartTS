@@ -1,22 +1,33 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main (main) where
 
 import Test.Tasty
 import Test.Tasty.HUnit
 import SmartTS.AST
 import SmartTS.Parser
+import Data.Aeson (object, (.=))
+import SmartTS.Interpreter (ContractInstance (..), contractInstanceFromStorageValue)
+import SmartTS.TypeCheck (typeCheckContract)
 
 main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "Parser Tests"
-  [ contractTests
-  , storageTests
-  , methodTests
-  , expressionTests
-  , statementTests
-  , errorTests
-  ]
+tests =
+  testGroup
+    "SmartTS"
+    [ testGroup
+        "Parser Tests"
+        [ contractTests
+        , storageTests
+        , methodTests
+        , expressionTests
+        , statementTests
+        , errorTests
+        ]
+    , typeCheckTests
+    ]
 
 -- Helper function to parse and assert success
 parseSuccess :: String -> (Contract -> Assertion) -> Assertion
@@ -29,6 +40,22 @@ parseFailure :: String -> Assertion
 parseFailure input = case parseContractFromString input of
   Left _ -> return ()  -- Expected failure
   Right _ -> assertFailure "Expected parse failure but got success"
+
+typeCheckSuccess :: String -> Assertion
+typeCheckSuccess input = case parseContractFromString input of
+  Left err -> assertFailure $ "Parse failed: " ++ show err
+  Right c ->
+    case typeCheckContract c of
+      Left err -> assertFailure $ "Type check failed: " ++ err
+      Right () -> return ()
+
+typeCheckFailure :: String -> Assertion
+typeCheckFailure input = case parseContractFromString input of
+  Left err -> assertFailure $ "Parse failed (need valid parse for type test): " ++ show err
+  Right c ->
+    case typeCheckContract c of
+      Left _ -> return ()
+      Right () -> assertFailure "Expected type error but checking succeeded"
 
 contractTests :: TestTree
 contractTests = testGroup "Contract Parsing"
@@ -408,6 +435,45 @@ statementTests = testGroup "Statement Parsing"
               return ()
           _ -> assertFailure $ "Expected local record field assignment, got: " ++ show contract
   ]
+
+typeCheckTests :: TestTree
+typeCheckTests =
+  testGroup
+    "Type checker"
+    [ testCase "Minimal well-typed contract" $
+        typeCheckSuccess
+          "contract C { storage: { x: int }; @originate init(): int { return 0; } }"
+    , testCase "Return type mismatch" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): int { return true; } }"
+    , testCase "Arithmetic requires int" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): int { return 1 + true; } }"
+    , testCase "Cannot assign to val" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): int { val v: int = 1; v = 2; return 0; } }"
+    , testCase "Equality requires same types" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): bool { return 1 == true; } }"
+    , testCase "If condition must be bool" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): int { if (1) { return 0; } else { return 1; } } }"
+    , testCase "Storage field assignment matches storage type" $
+        typeCheckSuccess
+          "contract C { storage: { n: int }; @originate init(): unit { storage.n = 3; return (); } }"
+    , testCase "Unknown storage field" $
+        typeCheckFailure
+          "contract C { storage: { n: int }; @originate init(): unit { storage.missing = 1; return (); } }"
+    , testCase "Persisted storage decodes against contract storage type" $
+        parseSuccess
+          "contract C { storage: { n: int, b: bool }; @originate init(): unit { return (); } }"
+          $ \c ->
+            case contractInstanceFromStorageValue c (object ["n" .= (1 :: Int), "b" .= True]) of
+              Left err -> assertFailure err
+              Right (ContractInstance _ st) -> case st of
+                Record [("n", CInt 1), ("b", CBool True)] -> return ()
+                _ -> assertFailure $ "unexpected storage expr: " ++ show st
+    ]
 
 errorTests :: TestTree
 errorTests = testGroup "Error Cases"

@@ -48,6 +48,7 @@ build-type:         Simple
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    CHANGELOG.md
+                    docs/TYPECHECK.md
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
@@ -62,9 +63,10 @@ library
     -- Modules exported by the library.
     exposed-modules:
         MyLib
-      , SmartTS.AST
+      ,         SmartTS.AST
       , SmartTS.Parser
       , SmartTS.Interpreter
+      , SmartTS.TypeCheck
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -145,6 +147,7 @@ test-suite smart-ts-test
     -- Test dependencies.
     build-depends:
         base >=4.17.0.0,
+        aeson >=2.0,
         smart-ts,
         tasty >=1.4,
         tasty-hunit >=0.10
