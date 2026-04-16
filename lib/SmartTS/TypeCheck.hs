@@ -23,6 +23,7 @@ data TcEnv = TcEnv
   { envStorageType :: Type
   , envBindings :: M.Map Name TcBinding
   , envReturnType :: Type
+  , envIsView :: Bool
   }
   deriving (Eq, Show)
 
@@ -59,6 +60,7 @@ checkMethod c m =
           { envStorageType = storageT
           , envBindings = paramMap
           , envReturnType = methodReturnType m
+          , envIsView = isViewMethod m
           }
    in void (checkStmt env0 (methodBody m))
 
@@ -112,11 +114,15 @@ insertLocal :: Name -> BindingKind -> Type -> TcEnv -> TcEnv
 insertLocal n k t env =
   env {envBindings = M.insert n (TcBinding k t) (envBindings env)}
 
--- | @storage@ is always assignable; locals must be mutable. Parameters and @val@ are not.
+-- | In @view methods, storage is read-only.
+-- Locals must still respect mutability: parameters and @val@ are not assignable.
 checkAssignable :: TcEnv -> LValue -> Either String ()
 checkAssignable env lv =
   case rootOf lv of
-    LStorage -> Right ()
+    LStorage ->
+      if envIsView env
+        then Left "@view method cannot modify storage."
+        else Right ()
     LVar n ->
       case M.lookup n (envBindings env) of
         Nothing -> Left $ "Unknown assignment target: `" ++ n ++ "`."
