@@ -14,6 +14,7 @@ data MethodDecl = MethodDecl {
   methodArgs :: [FormalParameter],
   methodReturnType ::  ReturnType,
   methodBody ::  MethodBody
+  method_isview :: Bool
 } deriving (Eq, Show)
 
 data MethodKind = Originate

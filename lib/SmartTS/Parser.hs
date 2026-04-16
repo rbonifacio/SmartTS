@@ -38,6 +38,7 @@ reservedWords =
   , "val"
   , "true"
   , "false"
+  , "view"
   ]
 
 identifier :: Parser String
@@ -281,6 +282,7 @@ parseFormalParameters = parens $ sepBy parseFormalParameter (symbol ",")
 -- Methods
 parseMethod :: Parser MethodDecl
 parseMethod = do
+  isView <- option False (True <$ reserved "view")
   decorators <- many parseMethodKind
   name <- parseName
   params <- parseFormalParameters
@@ -311,3 +313,4 @@ parseProgram = spaceConsumer >> parseContract <* eof
 -- Public API
 parseContractFromString :: String -> Either (ParseErrorBundle String Void) Contract
 parseContractFromString = parse parseProgram ""
+
