@@ -38,6 +38,10 @@ reservedWords =
   , "val"
   , "true"
   , "false"
+  , "map"
+  , "empty_map"
+  , "mem"
+  , "remove"
   ]
 
 identifier :: Parser String
@@ -54,7 +58,7 @@ reserved = symbol
 
 -- Types
 parseType :: Parser Type
-parseType = parseRecordType <|> parsePrimitiveType
+parseType = parseMapType <|> parseRecordType <|> parsePrimitiveType
   where
     parsePrimitiveType :: Parser Type
     parsePrimitiveType =
@@ -73,6 +77,16 @@ parseType = parseRecordType <|> parsePrimitiveType
       _ <- symbol ":"
       typ <- parseType
       return (name, typ)
+
+    parseMapType :: Parser Type
+    parseMapType = do
+      _ <- reserved "map"
+      _ <- symbol "<"
+      kTyp <- parseType
+      _ <- symbol ","
+      vTyp <- parseType
+      _ <- symbol ">"
+      return $ TMap kTyp vTyp
 
 -- Names
 parseName :: Parser Name
@@ -103,11 +117,21 @@ operators =
   , [ InfixL (Or <$ symbol "||") ]
   ]
 
+data Accessor = AccField Name | AccMap Expr
+
+parseAccessor :: Parser Accessor
+parseAccessor = 
+      (AccField <$> (symbol "." *> parseName))
+  <|> (AccMap   <$> (symbol "[" *> parseExpr <* symbol "]"))
+
 parseTerm :: Parser Expr
 parseTerm = do
   base <- parseAtomOrStorage
-  fields <- many (symbol "." *> parseName)
-  return (foldl FieldAccess base fields)
+  accessors <- many parseAccessor
+  return $ foldl applyAccessor base accessors
+  where
+    applyAccessor b (AccField f) = FieldAccess b f
+    applyAccessor b (AccMap e)   = MapAccess b e
 
 parseAtomOrStorage :: Parser Expr
 parseAtomOrStorage =
@@ -118,6 +142,9 @@ parseAtom :: Parser Expr
 parseAtom =
   parseUnit
     <|> parseRecordExpr
+    <|> (reserved "empty_map" >> return MapEmpty)
+    <|> parseMapMem
+    <|> parseMapRemove
     <|> parseBool
     <|> parseInt
     <|> parseVar
@@ -223,8 +250,11 @@ parseAssignment = do
 parseLValue :: Parser LValue
 parseLValue = do
   base <- parseAssignableBase
-  fields <- many (symbol "." *> parseName)
-  return (foldl LField base fields)
+  accessors <- many parseAccessor
+  return $ foldl applyAccessor base accessors
+  where
+    applyAccessor b (AccField f) = LField b f
+    applyAccessor b (AccMap e)   = LMapAccess b e
 
 parseAssignableBase :: Parser LValue
 parseAssignableBase =
@@ -260,6 +290,26 @@ parseStorageField = do
   _ <- symbol ":"
   typ <- parseType
   return (name, typ)
+
+parseMapMem :: Parser Expr
+parseMapMem = do
+  _ <- reserved "mem"
+  _ <- symbol "("
+  mapExpr <- parseExpr
+  _ <- symbol ","
+  keyExpr <- parseExpr
+  _ <- symbol ")"
+  return $ MapMemCheck mapExpr keyExpr
+
+parseMapRemove :: Parser Expr
+parseMapRemove = do
+  _ <- reserved "remove"
+  _ <- symbol "("
+  mapExpr <- parseExpr
+  _ <- symbol ","
+  keyExpr <- parseExpr
+  _ <- symbol ")"
+  return $ MapRem mapExpr keyExpr
 
 -- Method decorators
 parseMethodKind :: Parser MethodKind
