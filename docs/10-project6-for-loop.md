@@ -152,6 +152,48 @@ Added type-check tests:
 
 ---
 
+## Sample Contracts
+
+Added three end-to-end example contracts in `samples/`:
+
+### Factorial.smartts
+
+Computes factorial using a `for` loop with mutable counter:
+
+```typescript
+for (var i: int = 1; i <= n; i = i + 1) {
+  storage.result = storage.result * i;
+}
+```
+
+Example: `compute(5)` returns `120`.
+
+### Sum.smartts
+
+Computes sum of integers in a range:
+
+```typescript
+for (var i: int = from; i <= to; i = i + 1) {
+  storage.total = storage.total + i;
+}
+```
+
+Example: `sumRange(1, 10)` returns `55`.
+
+### RepeatedIncrement.smartts
+
+Increments storage value a specified number of times:
+
+```typescript
+for (var i: int = 0; i < times; i = i + 1) {
+  storage.value = storage.value + 1;
+}
+```
+
+Example: `incrementTimes(7)` increments value by 7.
+
+---
+
 ## Verification
 
 Executed command:
@@ -162,7 +204,13 @@ cabal test
 
 Result:
 
-- All tests passed after the `for` loop changes.
+- All 66 tests passed after the `for` loop changes.
+
+Sample contracts verified:
+
+- `Factorial.smartts`: compute(5) → 120 ✓
+- `Sum.smartts`: sumRange(1, 10) → 55 ✓
+- `RepeatedIncrement.smartts`: incrementTimes(7) from 100 → 107 ✓
 
 ---
 
@@ -173,3 +221,4 @@ Result:
 - [x] Type checker validates condition and mutability constraints
 - [x] Interpreter executes loop and preserves expected scope behavior
 - [x] Parser and type-checker tests added for success/failure paths
+- [x] End-to-end sample contracts added and verified
