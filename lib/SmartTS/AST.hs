@@ -30,6 +30,7 @@ data Type = TInt
           | TBool
           | TUnit
           | TRecord [(Name, Type)]
+          | TNever  -- Bottom type: fail_with returns never
   deriving (Eq, Show)
 
 type Name = String
@@ -55,6 +56,7 @@ data Expr = CInt Int
           | Gte Expr Expr
           | Record [(Name, Expr)]
           | Unit
+          | FailWith Expr  -- fail_with(payload): abort with payload
   deriving (Eq, Show)
 
 type MethodBody = Stmt
@@ -73,6 +75,7 @@ data Stmt = AssignmentStmt LValue Expr
           | IfStmt Expr Stmt (Maybe Stmt)     -- (condition, then, else)
           | WhileStmt Expr Stmt               -- (condition, body)  
           | ReturnStmt Expr
+          | RequireStmt Expr Expr             -- require(condition, payload)
           | SequenceStmt [Stmt]
   deriving (Eq, Show)
 
