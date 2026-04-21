@@ -7,7 +7,15 @@ import Test.Tasty.HUnit
 import SmartTS.AST
 import SmartTS.Parser
 import Data.Aeson (object, (.=))
-import SmartTS.Interpreter (ContractInstance (..), contractInstanceFromStorageValue)
+
+import SmartTS.Interpreter
+  ( ContractInstance (..)
+  , contractInstanceFromStorageValue
+  , originateWithJsonArgs
+  , callEntrypointWithJsonArgs
+  , callViewWithJsonArgs
+  )
+
 import SmartTS.TypeCheck (typeCheckContract)
 
 main :: IO ()
@@ -27,6 +35,7 @@ tests =
         , errorTests
         ]
     , typeCheckTests
+    , viewTests
     ]
 
 -- Helper function to parse and assert success
@@ -55,6 +64,14 @@ typeCheckFailure input = case parseContractFromString input of
   Right c ->
     case typeCheckContract c of
       Left _ -> return ()
+      Right () -> assertFailure "Expected type error but checking succeeded"
+
+typeCheckFailureWithMessage :: String -> String -> Assertion
+typeCheckFailureWithMessage input expected = case parseContractFromString input of
+  Left err -> assertFailure $ "Parse failed (need valid parse for type test): " ++ show err
+  Right c ->
+    case typeCheckContract c of
+      Left actual -> assertEqual "Unexpected type error message" expected actual
       Right () -> assertFailure "Expected type error but checking succeeded"
 
 contractTests :: TestTree
@@ -502,3 +519,68 @@ errorTests = testGroup "Error Cases"
   , testCase "Invalid expression syntax" $
       parseFailure "contract Test { storage: { x: int }; @entrypoint test(): int { return +; } }"
   ]
+
+
+viewTests :: TestTree
+viewTests =
+  testGroup
+    "@view Tests"
+    [ testCase "Parser accepts @view method" $
+        parseSuccess
+          "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @view get(): int { return storage.count; } }"
+          $ \contract ->
+              assertBool
+                "Expected a method named get"
+                (any (\m -> methodName m == "get") (contractMethods contract))
+
+    , testCase "Type checker rejects storage mutation inside @view" $
+        typeCheckFailureWithMessage
+          "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @view bad(): unit { storage.count = 10; return (); } }"
+          "@view method cannot modify storage."
+
+    , testCase "@view returns value without changing repository" $
+        parseSuccess
+          "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @view get(): int { return storage.count; } }"
+          $ \contract ->
+              case typeCheckContract contract of
+                Left err -> assertFailure $ "Type check failed: " ++ err
+                Right () ->
+                  case originateWithJsonArgs mempty contract
+                        "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @view get(): int { return storage.count; } }"
+                        (object ["n" .= (5 :: Int)]) of
+                    Left err -> assertFailure $ "Originate failed: " ++ err
+                    Right (addr, repo1) ->
+                      case callViewWithJsonArgs repo1 contract addr "get"
+                            "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @view get(): int { return storage.count; } }"
+                            (object []) of
+                        Left err -> assertFailure $ "View failed: " ++ err
+                        Right (ret, repo2) -> do
+                          assertEqual "View return value" (Just (CInt 5)) ret
+                          assertEqual "Repository must not change after @view" repo1 repo2
+
+    , testCase "Entrypoint mutates storage and @view reads updated value" $
+        parseSuccess
+          "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @entrypoint inc(by: int): int { storage.count = storage.count + by; return storage.count; } @view get(): int { return storage.count; } }"
+          $ \contract ->
+              case typeCheckContract contract of
+                Left err -> assertFailure $ "Type check failed: " ++ err
+                Right () ->
+                  case originateWithJsonArgs mempty contract
+                        "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @entrypoint inc(by: int): int { storage.count = storage.count + by; return storage.count; } @view get(): int { return storage.count; } }"
+                        (object ["n" .= (5 :: Int)]) of
+                    Left err -> assertFailure $ "Originate failed: " ++ err
+                    Right (addr, repo1) ->
+                      case callEntrypointWithJsonArgs repo1 contract addr "inc"
+                            "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @entrypoint inc(by: int): int { storage.count = storage.count + by; return storage.count; } @view get(): int { return storage.count; } }"
+                            (object ["by" .= (2 :: Int)]) of
+                        Left err -> assertFailure $ "Entrypoint failed: " ++ err
+                        Right (ret1, repo2) -> do
+                          assertEqual "Entrypoint return value" (Just (CInt 7)) ret1
+                          case callViewWithJsonArgs repo2 contract addr "get"
+                                "contract Counter { storage: { count: int }; @originate init(n: int): unit { storage = { count: n }; return (); } @entrypoint inc(by: int): int { storage.count = storage.count + by; return storage.count; } @view get(): int { return storage.count; } }"
+                                (object []) of
+                            Left err -> assertFailure $ "View failed: " ++ err
+                            Right (ret2, repo3) -> do
+                              assertEqual "View sees updated value" (Just (CInt 7)) ret2
+                              assertEqual "View still must not mutate repository" repo2 repo3
+    ]

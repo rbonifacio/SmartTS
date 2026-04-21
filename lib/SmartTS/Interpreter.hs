@@ -453,9 +453,9 @@ setField _ _ _ = interpretBug "setField on non-record after type check"
 
 insertOrReplace :: Name -> Expr -> [(Name, Expr)] -> [(Name, Expr)]
 insertOrReplace k v [] = [(k, v)]
-insertOrReplace k v ((k0, _v0) : rest)
+insertOrReplace k v ((k0, v0):rest)
   | k == k0 = (k, v) : rest
-  | otherwise = (k0, v) : insertOrReplace k v rest
+  | otherwise = (k0, v0) : insertOrReplace k v rest
 
 evalInt :: Runtime -> Expr -> Either String Int
 evalInt rt e = do
