@@ -30,6 +30,7 @@ data Type = TInt
           | TBool
           | TUnit
           | TRecord [(Name, Type)]
+          | TMap Type Type
   deriving (Eq, Show)
 
 type Name = String
@@ -55,6 +56,10 @@ data Expr = CInt Int
           | Gte Expr Expr
           | Record [(Name, Expr)]
           | Unit
+          | MapEmpty
+          | MapAccess Expr Expr
+          | MapMemCheck Expr Expr
+          | MapRem Expr Expr
   deriving (Eq, Show)
 
 type MethodBody = Stmt
@@ -65,6 +70,7 @@ data LValue
   = LStorage
   | LVar Name
   | LField LValue Name
+  | LMapAccess LValue Expr
   deriving (Eq, Show)
 
 data Stmt = AssignmentStmt LValue Expr

@@ -1,0 +1,31 @@
+contract Membership {
+  storage: {
+    admin_id: int,
+    members: map<int, bool>
+  };
+
+  @originate
+  init(admin: int): unit {
+    storage.admin_id = admin;
+    storage.members = empty_map;
+    
+    return ();
+  }
+
+  @entrypoint
+  addMember(new_user: int): unit {
+    storage.members[new_user] = true;
+    
+    return ();
+  }
+
+  @entrypoint
+  removeMember(user: int): bool {
+    if (mem(storage.members, user)) {
+      storage.members = remove(storage.members, user);
+      return true;
+    }
+
+    return false;
+  }
+}
