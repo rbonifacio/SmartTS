@@ -98,6 +98,40 @@ checkStmt env (WhileStmt cond body) = do
   expectType "while condition" tc TBool
   void (checkStmt env body)
   return env
+checkStmt env (ForStmt initClause cond stepClause body) = do
+  envLoop <- checkForInit env initClause
+  tc <- inferExpr envLoop cond
+  expectType "for condition" tc TBool
+  void (checkStmt envLoop body)
+  checkForStep envLoop stepClause
+  return env
+
+checkForInit :: TcEnv -> ForInit -> Either String TcEnv
+checkForInit env ForInitNone = Right env
+checkForInit env (ForInitVar n typ e) = do
+  noDuplicateLocal n env
+  t <- inferExpr env e
+  expectType ("initializer of for var `" ++ n ++ "`") t typ
+  return $ insertLocal n LocalMutable typ env
+checkForInit env (ForInitVal n typ e) = do
+  noDuplicateLocal n env
+  t <- inferExpr env e
+  expectType ("initializer of for val `" ++ n ++ "`") t typ
+  return $ insertLocal n LocalImmutable typ env
+checkForInit env (ForInitAssign lv e) = do
+  checkAssignable env lv
+  tl <- typeOfLValue env lv
+  te <- inferExpr env e
+  expectType "for initializer assignment" te tl
+  return env
+
+checkForStep :: TcEnv -> ForStep -> Either String ()
+checkForStep _ ForStepNone = Right ()
+checkForStep env (ForStepAssign lv e) = do
+  checkAssignable env lv
+  tl <- typeOfLValue env lv
+  te <- inferExpr env e
+  expectType "for step assignment" te tl
 
 noDuplicateLocal :: Name -> TcEnv -> Either String ()
 noDuplicateLocal n env =

@@ -72,8 +72,21 @@ data Stmt = AssignmentStmt LValue Expr
           | ValDeclStmt Name Type Expr   -- (immutable)
           | IfStmt Expr Stmt (Maybe Stmt)     -- (condition, then, else)
           | WhileStmt Expr Stmt               -- (condition, body)  
+          | ForStmt ForInit Expr ForStep Stmt -- (init; condition; step) body
           | ReturnStmt Expr
           | SequenceStmt [Stmt]
+  deriving (Eq, Show)
+
+data ForInit
+  = ForInitNone
+  | ForInitVar Name Type Expr
+  | ForInitVal Name Type Expr
+  | ForInitAssign LValue Expr
+  deriving (Eq, Show)
+
+data ForStep
+  = ForStepNone
+  | ForStepAssign LValue Expr
   deriving (Eq, Show)
 
 findMethods :: MethodKind -> Contract -> [MethodDecl]

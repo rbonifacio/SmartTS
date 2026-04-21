@@ -14,6 +14,7 @@ import Data.Char (isDigit, isHexDigit, toLower)
 import Data.Digest.Pure.SHA (sha256, showDigest)
 import Data.List (stripPrefix)
 import qualified Data.Map.Strict as M
+import qualified Data.Set as S
 import Data.Scientific (floatingOrInteger)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
@@ -290,6 +291,29 @@ execStmt rt (WhileStmt cond body) = loop rt
             Just v -> Right (Just v, next)
             Nothing -> loop next
         _ -> interpretBug "while condition was not bool after type check"
+execStmt rt (ForStmt initClause cond stepClause body) = do
+  (loopVarName, rtAfterInit) <- execForInit rt initClause
+  let outerLocalNames = M.keysSet (rtLocals rt)
+      loopScopeNames =
+        case loopVarName of
+          Nothing -> outerLocalNames
+          Just n -> S.insert n outerLocalNames
+      cleanupAfterLoop = sanitizeLocals outerLocalNames
+      cleanupAfterIteration = sanitizeLocals loopScopeNames
+      loop cur = do
+        c <- evalExpr cur cond
+        case c of
+          CBool False -> Right (Nothing, cleanupAfterLoop cur)
+          CBool True -> do
+            (ret, afterBody) <- execStmt cur body
+            let bodyScoped = cleanupAfterIteration afterBody
+            case ret of
+              Just v -> Right (Just v, cleanupAfterLoop bodyScoped)
+              Nothing -> do
+                afterStep <- execForStep bodyScoped stepClause
+                loop (cleanupAfterIteration afterStep)
+          _ -> interpretBug "for condition was not bool after type check"
+  loop rtAfterInit
 
 execSequence :: Runtime -> [Stmt] -> Either String (Maybe Expr, Runtime)
 execSequence rt [] = Right (Nothing, rt)
@@ -298,6 +322,34 @@ execSequence rt (s:ss) = do
   case ret of
     Just v -> Right (Just v, rt')
     Nothing -> execSequence rt' ss
+
+execForInit :: Runtime -> ForInit -> Either String (Maybe Name, Runtime)
+execForInit rt ForInitNone = Right (Nothing, rt)
+execForInit rt (ForInitVar n _ e) = do
+  v <- evalExpr rt e
+  let locals' = M.insert n (Binding True v) (rtLocals rt)
+  Right (Just n, rt {rtLocals = locals'})
+execForInit rt (ForInitVal n _ e) = do
+  v <- evalExpr rt e
+  let locals' = M.insert n (Binding False v) (rtLocals rt)
+  Right (Just n, rt {rtLocals = locals'})
+execForInit rt (ForInitAssign lv e) = do
+  v <- evalExpr rt e
+  rt' <- assignLValue rt lv v
+  Right (Nothing, rt')
+
+execForStep :: Runtime -> ForStep -> Either String Runtime
+execForStep rt ForStepNone = Right rt
+execForStep rt (ForStepAssign lv e) = do
+  v <- evalExpr rt e
+  assignLValue rt lv v
+
+sanitizeLocals :: S.Set Name -> Runtime -> Runtime
+sanitizeLocals allowed rt =
+  rt
+    { rtLocals =
+        M.filterWithKey (\name _ -> S.member name allowed) (rtLocals rt)
+    }
 
 evalExpr :: Runtime -> Expr -> Either String Expr
 evalExpr _ c@(CInt _) = Right c
