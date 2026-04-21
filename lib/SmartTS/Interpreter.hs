@@ -6,7 +6,7 @@
 -- internal bugs ("interpretBug") rather than user-facing "Left" errors.
 module SmartTS.Interpreter where
 
-import Data.Aeson (Value(..))
+import Data.Aeson (Value (..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.ByteString.Lazy (fromStrict)
@@ -62,10 +62,10 @@ parseEmbeddedSourceHashPrefix addr = do
   rest <- stripPrefix "KT1" addr
   case break (== '_') rest of
     (hexPart, '_' : numStr)
-      | length hexPart == 16,
-        all isHexDigit hexPart,
-        not (null numStr),
-        all isDigit numStr ->
+      | length hexPart == 16
+          && all isHexDigit hexPart
+          && not (null numStr)
+          && all isDigit numStr ->
           Just (map toLower hexPart)
     _ -> Nothing
 
@@ -76,16 +76,17 @@ assertAddressMatchesSource addr sourceText =
     Nothing -> Right ()
     Just embedded ->
       let actual = map toLower (sourceHashPrefix16 sourceText)
-       in if embedded == actual
-            then Right ()
-            else
-              Left $
-                "Contract source on disk does not match the code hash in the address "
-                  ++ "(embedded "
-                  ++ embedded
-                  ++ "...; file hashes to "
-                  ++ actual
-                  ++ "...). Restore the original source or originate a new instance."
+       in
+        if embedded == actual
+          then Right ()
+          else
+            Left $
+              "Contract source on disk does not match the code hash in the address "
+                ++ "(embedded "
+                ++ embedded
+                ++ "...; file hashes to "
+                ++ actual
+                ++ "...). Restore the original source or originate a new instance."
 
 -- | Synthetic address: @KT1@ + first 16 hex chars of SHA-256(UTF-8 source) + @_@ + instance index.
 -- Same source always yields the same prefix; the suffix distinguishes multiple deployments in one repo.
@@ -114,13 +115,13 @@ jsonToExprByType TBool (Bool b) = Right (CBool b)
 jsonToExprByType (TRecord fieldsT) (Object obj) = do
   fields <- mapM (decodeField obj) fieldsT
   Right (Record fields)
-  where
-    decodeField o (fname, ftype) =
-      case KM.lookup (fromStringKey fname) o of
-        Nothing -> Left $ "Missing record field in JSON args: " ++ fname
-        Just v -> do
-          ev <- jsonToExprByType ftype v
-          Right (fname, ev)
+ where
+  decodeField o (fname, ftype) =
+    case KM.lookup (fromStringKey fname) o of
+      Nothing -> Left $ "Missing record field in JSON args: " ++ fname
+      Just v -> do
+        ev <- jsonToExprByType ftype v
+        Right (fname, ev)
 jsonToExprByType _ _ = Left "JSON value does not match the expected SmartTS type."
 
 jsonToExprUntyped :: Value -> Either String Expr
@@ -133,13 +134,13 @@ jsonToExprUntyped Null = Right Unit
 jsonToExprUntyped (Object obj) = do
   fields <- mapM decodeKV (KM.toList obj)
   Right (Record fields)
-  where
-    decodeKV (k, v) = do
-      ev <- jsonToExprUntyped v
-      Right (toStringKey k, ev)
+ where
+  decodeKV (k, v) = do
+    ev <- jsonToExprUntyped v
+    Right (toStringKey k, ev)
 jsonToExprUntyped _ = Left "Unsupported JSON value for SmartTS expression."
 
--- | Decode persisted @storage@ JSON using the contract\'s declared storage record type.
+-- | Decode persisted @storage@ JSON using the contract's declared storage record type.
 contractInstanceFromStorageValue :: Contract -> Value -> Either String ContractInstance
 contractInstanceFromStorageValue c v = do
   st <- jsonToExprByType (TRecord (contractStorage c)) v
@@ -149,13 +150,13 @@ bindArgsByName :: [FormalParameter] -> Value -> Either String (M.Map Name Expr)
 bindArgsByName params (Object obj) = do
   pairs <- mapM decodeParam params
   Right (M.fromList pairs)
-  where
-    decodeParam (FormalParameter pname ptype) =
-      case KM.lookup (fromStringKey pname) obj of
-        Nothing -> Left $ "Missing argument in JSON object: " ++ pname
-        Just v -> do
-          e <- jsonToExprByType ptype v
-          Right (pname, e)
+ where
+  decodeParam (FormalParameter pname ptype) =
+    case KM.lookup (fromStringKey pname) obj of
+      Nothing -> Left $ "Missing argument in JSON object: " ++ pname
+      Just v -> do
+        e <- jsonToExprByType ptype v
+        Right (pname, e)
 bindArgsByName _ _ = Left "--args must be a JSON object."
 
 originateWithJsonArgs ::
@@ -194,7 +195,7 @@ execMethod m params = do
   (_, rt') <- execStmt initialRt (methodBody m)
   Right rt'
 
--- | Run a method with persisted storage (for @entrypoint calls).
+-- | Run a method with persisted storage.
 execMethodWithInitialStorage ::
   Expr ->
   MethodDecl ->
@@ -215,6 +216,13 @@ findEntryPointByName c name =
     [] -> Left $ "No @entrypoint named \"" ++ name ++ "\"."
     [m] -> Right m
     _ -> Left $ "Multiple @entrypoint methods named \"" ++ name ++ "\"."
+
+findViewByName :: Contract -> Name -> Either String MethodDecl
+findViewByName c name =
+  case filter (\m -> isViewMethod m && methodName m == name) (contractMethods c) of
+    [] -> Left $ "No @view named \"" ++ name ++ "\"."
+    [m] -> Right m
+    _ -> Left $ "Multiple @view methods named \"" ++ name ++ "\"."
 
 -- | Execute an @entrypoint with JSON args; persist updated storage into the repository map.
 -- @sourceText@ must be the exact .smartts file contents so it can be checked against the hash embedded in @addr@ (when present).
@@ -252,6 +260,36 @@ callEntrypointWithJsonArgs repo c addr entryName sourceText argsJson = do
           repo' = M.insert addr ci' repo
       Right (ret, repo')
 
+-- | Execute a @view with JSON args; do NOT persist any resulting storage.
+-- The current storage is loaded into the runtime so the view can read contract state.
+callViewWithJsonArgs ::
+  RepositoryState ->
+  Contract ->
+  Address ->
+  Name ->
+  String ->
+  Value ->
+  Either String (Maybe Expr, RepositoryState)
+callViewWithJsonArgs repo c addr viewName sourceText argsJson = do
+  ci <-
+    case M.lookup addr repo of
+      Nothing -> Left $ "Unknown address: " ++ addr
+      Just x -> Right x
+  assertAddressMatchesSource addr sourceText
+  if instanceContractName ci /= contractName c
+    then
+      Left $
+        "Contract name mismatch: instance is "
+          ++ instanceContractName ci
+          ++ " but loaded source is "
+          ++ contractName c
+          ++ "."
+    else do
+      m <- findViewByName c viewName
+      params <- bindArgsByName (methodArgs m) argsJson
+      (ret, _) <- execMethodWithInitialStorage (instanceStorage ci) m params
+      Right (ret, repo)
+
 execStmt :: Runtime -> Stmt -> Either String (Maybe Expr, Runtime)
 execStmt rt (SequenceStmt ss) = execSequence rt ss
 execStmt rt (ReturnStmt e) = do
@@ -279,21 +317,21 @@ execStmt rt (IfStmt cond thenS elseS) = do
         Just es -> execStmt rt es
     _ -> interpretBug "if condition was not bool after type check"
 execStmt rt (WhileStmt cond body) = loop rt
-  where
-    loop cur = do
-      c <- evalExpr cur cond
-      case c of
-        CBool False -> Right (Nothing, cur)
-        CBool True -> do
-          (ret, next) <- execStmt cur body
-          case ret of
-            Just v -> Right (Just v, next)
-            Nothing -> loop next
-        _ -> interpretBug "while condition was not bool after type check"
+ where
+  loop cur = do
+    c <- evalExpr cur cond
+    case c of
+      CBool False -> Right (Nothing, cur)
+      CBool True -> do
+        (ret, next) <- execStmt cur body
+        case ret of
+          Just v -> Right (Just v, next)
+          Nothing -> loop next
+      _ -> interpretBug "while condition was not bool after type check"
 
 execSequence :: Runtime -> [Stmt] -> Either String (Maybe Expr, Runtime)
 execSequence rt [] = Right (Nothing, rt)
-execSequence rt (s:ss) = do
+execSequence rt (s : ss) = do
   (ret, rt') <- execStmt rt s
   case ret of
     Just v -> Right (Just v, rt')
@@ -395,7 +433,7 @@ resolveRootExpr _ _ = interpretBug "invalid root for field update"
 setFieldPath :: Expr -> [Name] -> Expr -> Either String Expr
 setFieldPath _ [] _ = interpretBug "empty field path in assignment"
 setFieldPath base [f] v = setField base f v
-setFieldPath base (f:fs) v = do
+setFieldPath base (f : fs) v = do
   child <- getOrCreateField base f
   child' <- setFieldPath child fs v
   setField base f child'

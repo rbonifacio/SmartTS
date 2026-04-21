@@ -1,11 +1,11 @@
 module SmartTS.Parser where
 
 import SmartTS.AST
+import Control.Monad.Combinators.Expr
+import Data.Void
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
-import Control.Monad.Combinators.Expr
-import Data.Void
 
 type Parser = Parsec Void String
 
@@ -84,7 +84,7 @@ parseExpr = makeExprParser parseTerm operators
 
 operators :: [[Operator Parser Expr]]
 operators =
-  [ [ Prefix (Not <$ symbol "!") ]
+  [ [Prefix (Not <$ symbol "!")]
   , [ InfixL (Mul <$ symbol "*")
     , InfixL (Div <$ symbol "/")
     , InfixL (Mod <$ symbol "%")
@@ -99,8 +99,8 @@ operators =
     , InfixN (Lt <$ symbol "<")
     , InfixN (Gt <$ symbol ">")
     ]
-  , [ InfixL (And <$ symbol "&&") ]
-  , [ InfixL (Or <$ symbol "||") ]
+  , [InfixL (And <$ symbol "&&")]
+  , [InfixL (Or <$ symbol "||")]
   ]
 
 parseTerm :: Parser Expr
@@ -228,7 +228,8 @@ parseLValue = do
 
 parseAssignableBase :: Parser LValue
 parseAssignableBase =
-  (reserved "storage" >> return LStorage) <|> (LVar <$> parseName)
+  (reserved "storage" >> return LStorage)
+    <|> (LVar <$> parseName)
 
 parseReturn :: Parser Stmt
 parseReturn = do
@@ -267,6 +268,7 @@ parseMethodKind =
   (symbol "@originate" >> return Originate)
     <|> (symbol "@entrypoint" >> return EntryPoint)
     <|> (symbol "@private" >> return Private)
+    <|> (symbol "@view" >> return View)
 
 -- Formal parameters
 parseFormalParameter :: Parser FormalParameter
@@ -290,6 +292,7 @@ parseMethod = do
   let kind
         | Originate `elem` decorators = Originate
         | EntryPoint `elem` decorators = EntryPoint
+        | View `elem` decorators = View
         | otherwise = Private
   return $ MethodDecl kind name params returnType body
 

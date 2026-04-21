@@ -29,6 +29,12 @@ data CliCmd
       , cmdEntrypoint :: String
       , cmdArgsJson :: String
       }
+  | CmdView
+      { cmdRepo :: FilePath
+      , cmdAddress :: String
+      , cmdViewName :: String
+      , cmdArgsJson :: String
+      }
 
 data PersistedInstance = PersistedInstance
   { persistedContractName :: String
@@ -67,47 +73,71 @@ main = do
   case cmd of
     CmdOriginate r s a -> runOriginate r s a
     CmdCall r addr ep a -> runCall r addr ep a
+    CmdView r addr v a -> runView r addr v a
 
 parseCliOptions :: [String] -> IO CliCmd
 parseCliOptions args = do
   let hasOriginate = "--originate" `elem` args
       hasCall = "--call" `elem` args
+      hasView = "--view" `elem` args
+      selectedModes = length (filter id [hasOriginate, hasCall, hasView])
+
   repoDir <- lookupFlagValue "--repo" args
-  case (hasOriginate, hasCall) of
-    (True, True) ->
-      die "Use either --originate or --call, not both."
-    (True, False) -> do
-      sourcePath <- lookupFlagValue "--source" args
-      argsJson <- lookupFlagValue "--args" args
-      case (repoDir, sourcePath, argsJson) of
-        (Just r, Just s, Just a) ->
-          pure (CmdOriginate r s a)
-        _ ->
-          die $
-            unlines
-              [ "Usage (originate):"
-              , "  smart-ts --originate --repo <dir> --source <contract.smartts> --args '{\"x\":1}'"
-              ]
-    (False, True) -> do
-      addr <- lookupFlagValue "--address" args
-      ep <- lookupFlagValue "--entrypoint" args
-      argsJson <- lookupFlagValue "--args" args
-      case (repoDir, addr, ep, argsJson) of
-        (Just r, Just ad, Just e, Just a) ->
-          pure (CmdCall r ad e a)
-        _ ->
-          die $
-            unlines
-              [ "Usage (call):"
-              , "  smart-ts --call --repo <dir> --address <KT1...> --entrypoint <name> --args '{\"n\":1}'"
-              ]
-    (False, False) ->
+
+  case selectedModes of
+    0 ->
       die $
         unlines
           [ "Usage:"
           , "  smart-ts --originate --repo <dir> --source <contract.smartts> --args '{\"x\":1}'"
-          , "  smart-ts --call --repo <dir> --address <KT1...> --entrypoint <name> --args '{}'"
+          , "  smart-ts --call --repo <dir> --address <KT1...> --entrypoint <name> --args '{\"n\":1}'"
+          , "  smart-ts --view --repo <dir> --address <KT1...> --view-name <name> --args '{}'"
           ]
+    n
+      | n > 1 ->
+          die "Use exactly one of --originate, --call, or --view."
+    _ ->
+      if hasOriginate
+        then do
+          sourcePath <- lookupFlagValue "--source" args
+          argsJson <- lookupFlagValue "--args" args
+          case (repoDir, sourcePath, argsJson) of
+            (Just r, Just s, Just a) ->
+              pure (CmdOriginate r s a)
+            _ ->
+              die $
+                unlines
+                  [ "Usage (originate):"
+                  , "  smart-ts --originate --repo <dir> --source <contract.smartts> --args '{\"x\":1}'"
+                  ]
+        else
+          if hasCall
+            then do
+              addr <- lookupFlagValue "--address" args
+              ep <- lookupFlagValue "--entrypoint" args
+              argsJson <- lookupFlagValue "--args" args
+              case (repoDir, addr, ep, argsJson) of
+                (Just r, Just ad, Just e, Just a) ->
+                  pure (CmdCall r ad e a)
+                _ ->
+                  die $
+                    unlines
+                      [ "Usage (call):"
+                      , "  smart-ts --call --repo <dir> --address <KT1...> --entrypoint <name> --args '{\"n\":1}'"
+                      ]
+            else do
+              addr <- lookupFlagValue "--address" args
+              vname <- lookupFlagValue "--view-name" args
+              argsJson <- lookupFlagValue "--args" args
+              case (repoDir, addr, vname, argsJson) of
+                (Just r, Just ad, Just v, Just a) ->
+                  pure (CmdView r ad v a)
+                _ ->
+                  die $
+                    unlines
+                      [ "Usage (view):"
+                      , "  smart-ts --view --repo <dir> --address <KT1...> --view-name <name> --args '{}'"
+                      ]
 
 lookupFlagValue :: String -> [String] -> IO (Maybe String)
 lookupFlagValue flag args =
@@ -196,6 +226,52 @@ runCall repoDir address entrypoint argsJsonStr = do
         Nothing -> putStrLn "Call completed."
         Just v -> BL.putStr (encode (exprToJson v) `BL.snoc` 10)
 
+runView :: FilePath -> String -> String -> String -> IO ()
+runView repoDir address viewName argsJsonStr = do
+  persisted <- loadState repoDir
+  es <- resolveRepositoryState repoDir persisted
+  repoState <- case es of
+    Left err -> die ("Repository state: " ++ err)
+    Right ok -> pure ok
+  ci <-
+    case M.lookup address repoState of
+      Nothing -> die ("Unknown address: " ++ address)
+      Just x -> pure x
+
+  let contractPath =
+        repoDir </> "contracts" </> instanceContractName ci ++ ".smartts"
+  contractFileExists <- doesFileExist contractPath
+  if not contractFileExists
+    then
+      die
+        ( "Contract source not found: "
+            ++ contractPath
+            ++ " (originate the contract into this repo first)."
+        )
+    else do
+      source <- readFile contractPath
+      contract <-
+        case parseContractFromString source of
+          Left e -> die ("Parse error: " ++ show e)
+          Right c -> pure c
+      case typeCheckContract contract of
+        Left err -> die ("Type error: " ++ err)
+        Right () -> pure ()
+
+      argsValue <-
+        case eitherDecode (BL.fromStrict (toStrictUtf8 argsJsonStr)) of
+          Left e -> die ("Invalid JSON for --args: " ++ e)
+          Right v -> pure v
+
+      (maybeRet, _repoStateUnchanged) <-
+        case callViewWithJsonArgs repoState contract address viewName source argsValue of
+          Left e -> die ("View failed: " ++ e)
+          Right ok -> pure ok
+
+      case maybeRet of
+        Nothing -> putStrLn "View completed."
+        Just v -> BL.putStr (encode (exprToJson v) `BL.snoc` 10)
+
 toPersistedState :: RepositoryState -> PersistedState
 toPersistedState repo =
   PersistedState $
@@ -207,52 +283,52 @@ toPersistedState repo =
       )
       repo
 
--- | Rebuild runtime instances from @state.json@: parse each @contracts\/\<Name\>.smartts@,
--- type-check it, and decode storage JSON against the contract\'s storage record type.
+-- | Rebuild runtime instances from @state.json@: parse each @contracts/<Name>.smartts@,
+-- type-check it, and decode storage JSON against the contract's storage record type.
 resolveRepositoryState :: FilePath -> PersistedState -> IO (Either String RepositoryState)
 resolveRepositoryState repoDir (PersistedState m)
   | M.null m = return (Right M.empty)
   | otherwise = go (M.toList m) M.empty
-  where
-    go [] acc = return (Right acc)
-    go ((addr, pinst) : rest) acc = do
-      let name = persistedContractName pinst
-          path = repoDir </> "contracts" </> name ++ ".smartts"
-      fileOk <- doesFileExist path
-      if not fileOk
-        then
-          return $
-            Left $
-              "Missing contract source for instance at address "
-                ++ addr
-                ++ " (expected file "
-                ++ path
-                ++ ")."
-        else do
-          src <- readFile path
-          case parseContractFromString src of
-            Left err ->
-              return $ Left $ "Parse error loading " ++ path ++ ": " ++ show err
-            Right c
-              | contractName c /= name ->
-                  return $
-                    Left $
-                      "Contract in " ++ path ++ " is named `" ++ contractName c ++ "` but state.json expects `" ++ name ++ "` for address " ++ addr ++ "."
-              | otherwise ->
-                  case typeCheckContract c of
-                    Left terr -> return $ Left $ "Type error in " ++ path ++ ": " ++ terr
-                    Right () ->
-                      case contractInstanceFromStorageValue c (persistedStorage pinst) of
-                        Left s ->
-                          return $
-                            Left $
-                              "Persisted storage for "
-                                ++ addr
-                                ++ " does not match contract `"
-                                ++ name
-                                ++ "` storage type: "
-                                ++ s
-                        Right ci -> go rest (M.insert addr ci acc)
+ where
+  go [] acc = return (Right acc)
+  go ((addr, pinst) : rest) acc = do
+    let name = persistedContractName pinst
+        path = repoDir </> "contracts" </> name ++ ".smartts"
+    fileOk <- doesFileExist path
+    if not fileOk
+      then
+        return $
+          Left $
+            "Missing contract source for instance at address "
+              ++ addr
+              ++ " (expected file "
+              ++ path
+              ++ ")."
+      else do
+        src <- readFile path
+        case parseContractFromString src of
+          Left err ->
+            return $ Left $ "Parse error loading " ++ path ++ ": " ++ show err
+          Right c
+            | contractName c /= name ->
+                return $
+                  Left $
+                    "Contract in " ++ path ++ " is named `" ++ contractName c ++ "` but state.json expects `" ++ name ++ "` for address " ++ addr ++ "."
+            | otherwise ->
+                case typeCheckContract c of
+                  Left terr -> return $ Left $ "Type error in " ++ path ++ ": " ++ terr
+                  Right () ->
+                    case contractInstanceFromStorageValue c (persistedStorage pinst) of
+                      Left s ->
+                        return $
+                          Left $
+                            "Persisted storage for "
+                              ++ addr
+                              ++ " does not match contract `"
+                              ++ name
+                              ++ "` storage type: "
+                              ++ s
+                      Right ci' -> go rest (M.insert addr ci' acc)
 
 loadState :: FilePath -> IO PersistedState
 loadState repoDir = do

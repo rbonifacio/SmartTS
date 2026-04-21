@@ -28,4 +28,8 @@ contract Counter {
     storage.enabled = value;
     return ();
   }
+
+  @view get(): int {
+    return storage.count;
+  }
 }
