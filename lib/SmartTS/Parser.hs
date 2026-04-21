@@ -167,6 +167,7 @@ braces = between (symbol "{") (symbol "}")
 parseStmt :: Parser Stmt
 parseStmt =
   parseIfStmt
+    <|> parseForStmt
     <|> parseWhileStmt
     <|> parseVarDeclStmt
     <|> parseValDeclStmt
@@ -176,9 +177,9 @@ parseStmt =
 
 parseSimpleStmt :: Parser SimpleStmt
 parseSimpleStmt = 
-  parseSAssignment
-    <|> parseSVarDeclStmt
+  parseSVarDeclStmt
     <|> parseSValDeclStmt
+    <|> parseSAssignment
 
 parseVarDeclStmt :: Parser Stmt
 parseVarDeclStmt = do
