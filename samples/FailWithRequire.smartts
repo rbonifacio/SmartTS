@@ -1,0 +1,99 @@
+// Project 5 sample: fail_with and require
+//
+// Demonstrates both contract-abortion forms:
+//   - fail_with(payload)  : unconditional abort, expression of type 'never'
+//   - require(cond, payload) : conditional guard, desugared to
+//                              if (!cond) { return fail_with(payload); }
+//
+// Both map to Michelson's FAILWITH instruction.
+// Because fail_with has the bottom type 'never' (never <: T for all T),
+// it is valid in any return-type context without a type error.
+
+contract FailWithRequire {
+  storage: {
+    counter: int,
+    enabled: bool
+  };
+
+  // -----------------------------------------------------------------
+  // Originate: set initial state
+  // -----------------------------------------------------------------
+  @originate
+  init(): unit {
+    storage.counter = 0;
+    storage.enabled = true;
+    return ();
+  }
+
+  // -----------------------------------------------------------------
+  // fail_with: unconditional abort carrying a payload.
+  // Type: fail_with(expr) : never
+  // never <: int, so this method type-checks with return type int.
+  // -----------------------------------------------------------------
+  @entrypoint
+  getValueOrFail(shouldFail: bool): int {
+    if (shouldFail) {
+      return fail_with(99);   // aborts; payload = 99
+    } else {
+      return storage.counter;
+    }
+  }
+
+  // fail_with with type never is also valid where bool is expected.
+  @entrypoint
+  checkOrFail(condition: bool): bool {
+    if (condition) {
+      return true;
+    } else {
+      return fail_with(0);    // never <: bool
+    }
+  }
+
+  // -----------------------------------------------------------------
+  // require: conditional guard.
+  // require(cond, payload) aborts with payload when cond is false.
+  // Desugared at interpreter level:
+  //   if (!cond) { return fail_with(payload); }
+  // -----------------------------------------------------------------
+  @entrypoint
+  increment(by: int): int {
+    require(storage.enabled, 1);  // abort if disabled  (payload = 1)
+    require(by > 0, 2);           // abort if non-positive (payload = 2)
+    storage.counter = storage.counter + by;
+    return storage.counter;
+  }
+
+  // Multiple sequential requires — first failing one aborts.
+  @entrypoint
+  rangeAdd(x: int, y: int): int {
+    require(x > 0, 100);   // x must be positive
+    require(y > x, 101);   // y must be strictly greater than x
+    storage.counter = storage.counter + (y - x);
+    return storage.counter;
+  }
+
+  // require inside a conditional — only the taken branch evaluates it.
+  @entrypoint
+  conditionalGuard(flag: bool, v: int): int {
+    if (flag) {
+      require(v > 0, 500);
+      storage.counter = storage.counter + v;
+    } else {
+      storage.counter = 0;
+    }
+    return storage.counter;
+  }
+
+  // fail_with with a computed payload expression.
+  @entrypoint
+  failWithExpr(v: int): int {
+    return fail_with(v * 10 + 1);
+  }
+
+  // Toggle enabled flag (used to exercise the enabled guard above).
+  @entrypoint
+  setEnabled(value: bool): unit {
+    storage.enabled = value;
+    return ();
+  }
+}
