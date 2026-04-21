@@ -1,0 +1,24 @@
+contract RepeatedIncrement {
+  storage: {
+    value: int
+  };
+
+  @originate
+  init(initial: int): unit {
+    storage.value = initial;
+    return ();
+  }
+
+  @entrypoint
+  incrementTimes(times: int): int {
+    for (var i: int = 0; i < times; i = i + 1) {
+      storage.value = storage.value + 1;
+    }
+    return storage.value;
+  }
+
+  @entrypoint
+  getValue(): int {
+    return storage.value;
+  }
+}

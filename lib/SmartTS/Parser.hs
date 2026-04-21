@@ -30,6 +30,7 @@ reservedWords =
   , "int"
   , "bool"
   , "unit"
+  , "for"
   , "return"
   , "if"
   , "else"
@@ -167,6 +168,7 @@ parseStmt :: Parser Stmt
 parseStmt =
   parseIfStmt
     <|> parseWhileStmt
+    <|> parseForStmt
     <|> parseVarDeclStmt
     <|> parseValDeclStmt
     <|> parseReturn
@@ -211,6 +213,61 @@ parseWhileStmt = do
   cond <- parens parseExpr
   body <- parseStmt
   return $ WhileStmt cond body
+
+parseForStmt :: Parser Stmt
+parseForStmt = do
+  _ <- reserved "for"
+  _ <- symbol "("
+  initClause <- parseForInit
+  _ <- symbol ";"
+  cond <- parseExpr
+  _ <- symbol ";"
+  stepClause <- parseForStep
+  _ <- symbol ")"
+  body <- parseStmt
+  return $ ForStmt initClause cond stepClause body
+
+parseForInit :: Parser ForInit
+parseForInit =
+  try parseForInitVar
+    <|> try parseForInitVal
+    <|> try parseForInitAssign
+    <|> pure ForInitNone
+  where
+    parseForInitVar = do
+      _ <- reserved "var"
+      name <- parseName
+      _ <- symbol ":"
+      typ <- parseType
+      _ <- symbol "="
+      expr <- parseExpr
+      return (ForInitVar name typ expr)
+
+    parseForInitVal = do
+      _ <- reserved "val"
+      name <- parseName
+      _ <- symbol ":"
+      typ <- parseType
+      _ <- symbol "="
+      expr <- parseExpr
+      return (ForInitVal name typ expr)
+
+    parseForInitAssign = do
+      target <- parseLValue
+      _ <- symbol "="
+      expr <- parseExpr
+      return (ForInitAssign target expr)
+
+parseForStep :: Parser ForStep
+parseForStep =
+  try parseForStepAssign
+    <|> pure ForStepNone
+  where
+    parseForStepAssign = do
+      target <- parseLValue
+      _ <- symbol "="
+      expr <- parseExpr
+      return (ForStepAssign target expr)
 
 parseAssignment :: Parser Stmt
 parseAssignment = do

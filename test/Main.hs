@@ -343,6 +343,58 @@ statementTests = testGroup "Statement Parsing"
             return ()
           _ -> assertFailure $ "Expected while statement, got: " ++ show contract
 
+  , testCase "For statement (var init, condition, step)" $
+      parseSuccess "contract Test { storage: { x: int }; @entrypoint loop(): int { for (var i: int = 0; i < 3; i = i + 1) { x = x + 1; } return x; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "loop" [] TInt
+                (SequenceStmt
+                  [ ForStmt
+                      (ForInitVar "i" TInt (CInt 0))
+                      (Lt (Var "i") (CInt 3))
+                      (ForStepAssign (LVar "i") (Add (Var "i") (CInt 1)))
+                      (SequenceStmt [AssignmentStmt (LVar "x") (Add (Var "x") (CInt 1))])
+                  , ReturnStmt (Var "x")
+                  ])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected for statement, got: " ++ show contract
+
+  , testCase "For statement (empty init and empty step)" $
+      parseSuccess "contract Test { storage: { x: int }; @entrypoint loop(): int { for (; x < 10; ) { x = x + 1; } return x; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "loop" [] TInt
+                (SequenceStmt
+                  [ ForStmt
+                      ForInitNone
+                      (Lt (Var "x") (CInt 10))
+                      ForStepNone
+                      (SequenceStmt [AssignmentStmt (LVar "x") (Add (Var "x") (CInt 1))])
+                  , ReturnStmt (Var "x")
+                  ])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected for with empty clauses, got: " ++ show contract
+
+  , testCase "For statement (assignment init)" $
+      parseSuccess "contract Test { storage: { x: int }; @entrypoint loop(): int { var i: int = 10; for (i = 0; i < 3; i = i + 1) { x = x + i; } return i; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "loop" [] TInt
+                (SequenceStmt
+                  [ VarDeclStmt "i" TInt (CInt 10)
+                  , ForStmt
+                      (ForInitAssign (LVar "i") (CInt 0))
+                      (Lt (Var "i") (CInt 3))
+                      (ForStepAssign (LVar "i") (Add (Var "i") (CInt 1)))
+                      (SequenceStmt [AssignmentStmt (LVar "x") (Add (Var "x") (Var "i"))])
+                  , ReturnStmt (Var "i")
+                  ])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected for with assignment init, got: " ++ show contract
+
   , testCase "Field assignment statement (x.a = ...)" $
       parseSuccess "contract Test { storage: { x: { a: int } }; @entrypoint fa(): int { x.a = 3; return x.a; } }" $ \contract ->
         case contract of
@@ -461,6 +513,21 @@ typeCheckTests =
     , testCase "Storage field assignment matches storage type" $
         typeCheckSuccess
           "contract C { storage: { n: int }; @originate init(): unit { storage.n = 3; return (); } }"
+    , testCase "For loop with local counter is well-typed" $
+        typeCheckSuccess
+          "contract C { storage: { n: int }; @originate init(): unit { for (var i: int = 0; i < 3; i = i + 1) { storage.n = storage.n + 1; } return (); } }"
+    , testCase "For condition must be bool" $
+        typeCheckFailure
+          "contract C { storage: { n: int }; @originate init(): unit { for (var i: int = 0; 1; i = i + 1) { storage.n = storage.n + 1; } return (); } }"
+    , testCase "For step cannot assign to val loop variable" $
+        typeCheckFailure
+          "contract C { storage: { n: int }; @originate init(): unit { for (val i: int = 0; i < 3; i = i + 1) { storage.n = storage.n + 1; } return (); } }"
+    , testCase "Loop variable is out of scope after for" $
+        typeCheckFailure
+          "contract C { storage: { n: int }; @originate init(): int { for (var i: int = 0; i < 1; i = i + 1) { storage.n = storage.n + 1; } return i; } }"
+    , testCase "For initializer assignment to outer mutable local is well-typed" $
+        typeCheckSuccess
+          "contract C { storage: { n: int }; @originate init(): int { var i: int = 10; for (i = 0; i < 3; i = i + 1) { storage.n = storage.n + i; } return i; } }"
     , testCase "Unknown storage field" $
         typeCheckFailure
           "contract C { storage: { n: int }; @originate init(): unit { storage.missing = 1; return (); } }"

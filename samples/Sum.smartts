@@ -1,0 +1,26 @@
+contract Sum {
+  storage: {
+    total: int
+  };
+
+  @originate
+  init(): unit {
+    storage.total = 0;
+    return ();
+  }
+
+  @entrypoint
+  sumRange(from: int, to: int): int {
+    storage.total = 0;
+    for (var i: int = from; i <= to; i = i + 1) {
+      storage.total = storage.total + i;
+    }
+    return storage.total;
+  }
+
+  @entrypoint
+  reset(): unit {
+    storage.total = 0;
+    return ();
+  }
+}
