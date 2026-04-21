@@ -67,10 +67,16 @@ data LValue
   | LField LValue Name
   deriving (Eq, Show)
 
+data SimpleStmt = SAssignmentStmt LValue Expr
+          | SVarDeclStmt Name Type Expr
+          | SValDeclStmt Name Type Expr
+  deriving (Eq, Show)
+
 data Stmt = AssignmentStmt LValue Expr
           | VarDeclStmt Name Type Expr   -- (mutable)
           | ValDeclStmt Name Type Expr   -- (immutable)
           | IfStmt Expr Stmt (Maybe Stmt)     -- (condition, then, else)
+          | ForStmt SimpleStmt Expr SimpleStmt Stmt
           | WhileStmt Expr Stmt               -- (condition, body)  
           | ReturnStmt Expr
           | SequenceStmt [Stmt]

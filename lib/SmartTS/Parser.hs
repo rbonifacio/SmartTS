@@ -33,6 +33,7 @@ reservedWords =
   , "return"
   , "if"
   , "else"
+  , "for"
   , "while"
   , "var"
   , "val"
@@ -166,12 +167,19 @@ braces = between (symbol "{") (symbol "}")
 parseStmt :: Parser Stmt
 parseStmt =
   parseIfStmt
+    <|> parseForStmt
     <|> parseWhileStmt
     <|> parseVarDeclStmt
     <|> parseValDeclStmt
     <|> parseReturn
     <|> parseAssignment
     <|> parseBlock
+
+parseSimpleStmt :: Parser SimpleStmt
+parseSimpleStmt = 
+  parseSVarDeclStmt
+    <|> parseSValDeclStmt
+    <|> parseSAssignment
 
 parseVarDeclStmt :: Parser Stmt
 parseVarDeclStmt = do
@@ -195,6 +203,26 @@ parseValDeclStmt = do
   _ <- symbol ";"
   return $ ValDeclStmt name typ expr
 
+parseSVarDeclStmt :: Parser SimpleStmt
+parseSVarDeclStmt = do
+  _ <- reserved "var"
+  name <- parseName
+  _ <- symbol ":"
+  typ <- parseType
+  _ <- symbol "="
+  expr <- parseExpr
+  return $ SVarDeclStmt name typ expr
+
+parseSValDeclStmt :: Parser SimpleStmt
+parseSValDeclStmt = do
+  _ <- reserved "val"
+  name <- parseName
+  _ <- symbol ":"
+  typ <- parseType
+  _ <- symbol "="
+  expr <- parseExpr
+  return $ SValDeclStmt name typ expr
+
 parseIfStmt :: Parser Stmt
 parseIfStmt = do
   _ <- reserved "if"
@@ -204,6 +232,20 @@ parseIfStmt = do
     _ <- reserved "else"
     parseStmt
   return $ IfStmt cond thenBranch elseBranch
+
+parseForStmt :: Parser Stmt
+parseForStmt = do
+  _ <- reserved "for"
+  _ <- symbol "("
+  initial <- parseSimpleStmt
+  _ <- symbol ";"
+  cond <- parseExpr
+  _ <- symbol ";"
+  update <- parseSimpleStmt
+  _ <- symbol ")"
+  body <- parseStmt
+  
+  return $ ForStmt initial cond update body
 
 parseWhileStmt :: Parser Stmt
 parseWhileStmt = do
@@ -219,6 +261,13 @@ parseAssignment = do
   expr <- parseExpr
   _ <- symbol ";"
   return $ AssignmentStmt target expr
+
+parseSAssignment :: Parser SimpleStmt
+parseSAssignment = do
+  target <- parseLValue
+  _ <- symbol "="
+  expr <- parseExpr
+  return $ SAssignmentStmt target expr
 
 parseLValue :: Parser LValue
 parseLValue = do
