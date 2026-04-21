@@ -1,31 +1,33 @@
 contract Counter {
   storage: {
-    count: int,
-    enabled: bool
+    counts: pair<int, int>
   };
 
+  enum Direction { Up, Down }
+
   @originate
-  init(initialCount: int): unit {
-    var start: int = initialCount;
-    val isEnabled: bool = true;
-    storage.count = start;
-    storage.enabled = isEnabled;
+  init(): unit {
+    storage.counts = pair(0, 0);
     return ();
   }
 
   @entrypoint
-  increment(by: int): int {
-    if (storage.enabled) {
-      storage.count = storage.count + by;
-    } else {
-      storage.count = storage.count;
+  increment(dir: Direction): unit {
+    match (dir) {
+      Up => {
+        val (u, d): pair<int, int> = storage.counts;
+        storage.counts = pair(u + 1, d);
+      }
+      Down => {
+        val (u, d): pair<int, int> = storage.counts;
+        storage.counts = pair(u, d + 1);
+      }
     }
-    return storage.count;
+    return ();
   }
 
   @entrypoint
-  setEnabled(value: bool): unit {
-    storage.enabled = value;
-    return ();
+  totals(): pair<int, int> {
+    return storage.counts;
   }
 }
