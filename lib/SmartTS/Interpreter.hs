@@ -103,6 +103,8 @@ exprToJson (Record fields) =
       | (k, v) <- fields
       ]
 exprToJson Unit = Null
+exprToJson (FailWith payload) = 
+  Object $ KM.fromList [(fromStringKey "FAILWITH", exprToJson payload)]
 exprToJson _ = Null
 
 jsonToExprByType :: Type -> Value -> Either String Expr
@@ -278,6 +280,10 @@ execStmt rt (IfStmt cond thenS elseS) = do
         Nothing -> Right (Nothing, rt)
         Just es -> execStmt rt es
     _ -> interpretBug "if condition was not bool after type check"
+execStmt rt (RequireStmt cond payload) = do
+  -- Desugar: require(c, p) -> if (!c) { return fail_with(p); }
+  let desugared = IfStmt (Not cond) (ReturnStmt (FailWith payload)) Nothing
+  execStmt rt desugared
 execStmt rt (WhileStmt cond body) = loop rt
   where
     loop cur = do
@@ -349,6 +355,9 @@ evalExpr rt (Lt a b) = intCmp rt a b (<)
 evalExpr rt (Lte a b) = intCmp rt a b (<=)
 evalExpr rt (Gt a b) = intCmp rt a b (>)
 evalExpr rt (Gte a b) = intCmp rt a b (>=)
+evalExpr rt (FailWith payload) = do
+  v <- evalExpr rt payload
+  return (FailWith v)  -- Return the evaluated payload wrapped in FailWith
 
 assignLValue :: Runtime -> LValue -> Expr -> Either String Runtime
 assignLValue rt LStorage v = Right rt {rtStorage = Just v}

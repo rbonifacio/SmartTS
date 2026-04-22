@@ -9,6 +9,7 @@ import SmartTS.Parser
 import Data.Aeson (object, (.=))
 import SmartTS.Interpreter (ContractInstance (..), contractInstanceFromStorageValue)
 import SmartTS.TypeCheck (typeCheckContract)
+import FailWithRequireTests (failWithRequireTests)
 
 main :: IO ()
 main = defaultMain tests
@@ -27,6 +28,7 @@ tests =
         , errorTests
         ]
     , typeCheckTests
+    , failWithRequireTests
     ]
 
 -- Helper function to parse and assert success

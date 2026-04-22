@@ -93,6 +93,11 @@ checkStmt env (IfStmt cond thn mel) = do
     Nothing -> return ()
     Just els -> void (checkStmt env els)
   return env
+checkStmt env (RequireStmt cond payload) = do
+  tc <- inferExpr env cond
+  expectType "require condition" tc TBool
+  _ <- inferExpr env payload  -- type-check payload, ignore its type
+  return env
 checkStmt env (WhileStmt cond body) = do
   tc <- inferExpr env cond
   expectType "while condition" tc TBool
@@ -184,6 +189,9 @@ inferExpr env (Gte a b) = inferIntCmp env a b
 inferExpr env (Record pairs) = do
   ts <- mapM (\(k, e) -> (,) k <$> inferExpr env e) pairs
   Right (TRecord [(k, t) | (k, t) <- ts])
+inferExpr env (FailWith payload) = do
+  _ <- inferExpr env payload  -- type-check payload, ignore its type
+  return TNever  -- fail_with has type 'never'
 
 inferBoolBin :: TcEnv -> Expr -> Expr -> Either String Type
 inferBoolBin env a b = do
@@ -223,9 +231,15 @@ inferEq env a b = do
           ++ prettyType tb
           ++ ")."
 
+-- | Check if 'got' type is assignable to 'expected' type (subtyping).
+-- The never type (bottom) is assignable to any type.
+isAssignableTo :: Type -> Type -> Bool
+isAssignableTo TNever _ = True  -- never is subtype of everything
+isAssignableTo got expected = typesEqual got expected
+
 expectType :: String -> Type -> Type -> Either String ()
 expectType ctx got expected =
-  if typesEqual got expected
+  if isAssignableTo got expected
     then Right ()
     else
       Left $
@@ -235,6 +249,7 @@ typesEqual :: Type -> Type -> Bool
 typesEqual TInt TInt = True
 typesEqual TBool TBool = True
 typesEqual TUnit TUnit = True
+typesEqual TNever TNever = True
 typesEqual (TRecord as) (TRecord bs) = length as == length bs && and (zipWith fieldEq as bs)
   where
     fieldEq (n1, t1) (n2, t2) = n1 == n2 && typesEqual t1 t2
@@ -244,6 +259,7 @@ prettyType :: Type -> String
 prettyType TInt = "int"
 prettyType TBool = "bool"
 prettyType TUnit = "unit"
+prettyType TNever = "never"
 prettyType (TRecord fs) =
   "{"
     ++ concat
