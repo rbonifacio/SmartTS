@@ -98,6 +98,15 @@ checkStmt env (WhileStmt cond body) = do
   expectType "while condition" tc TBool
   void (checkStmt env body)
   return env
+checkStmt env (ForEachStmt varName listExpr body) = do
+  noDuplicateLocal varName env
+  tList <- inferExpr env listExpr
+  elemT <- case tList of
+    TList t -> Right t
+    _ -> Left "forEach iterable must be a list expression."
+  let envBody = insertLocal varName LocalImmutable elemT env
+  void (checkStmt envBody body)
+  Right env
 
 noDuplicateLocal :: Name -> TcEnv -> Either String ()
 noDuplicateLocal n env =
@@ -184,6 +193,36 @@ inferExpr env (Gte a b) = inferIntCmp env a b
 inferExpr env (Record pairs) = do
   ts <- mapM (\(k, e) -> (,) k <$> inferExpr env e) pairs
   Right (TRecord [(k, t) | (k, t) <- ts])
+inferExpr env (List t elems) = do
+  mapM_ checkElem elems
+  Right (TList t)
+  where
+    checkElem e = do
+      te <- inferExpr env e
+      expectType "list element" te t
+inferExpr env (ListHead e) = do
+  te <- inferExpr env e
+  case te of
+    TList inner -> Right inner
+    _ -> Left "head requires a list expression."
+inferExpr env (ListTail e) = do
+  te <- inferExpr env e
+  case te of
+    TList inner -> Right (TList inner)
+    _ -> Left "tail requires a list expression."
+inferExpr env (ListSize e) = do
+  te <- inferExpr env e
+  case te of
+    TList _ -> Right TInt
+    _ -> Left "size requires a list expression."
+inferExpr env (ListCons el lst) = do
+  te <- inferExpr env el
+  tl <- inferExpr env lst
+  case tl of
+    TList inner -> do
+      expectType "element of list cons" te inner
+      Right (TList inner)
+    _ -> Left "cons requires a list as the second argument."
 
 inferBoolBin :: TcEnv -> Expr -> Expr -> Either String Type
 inferBoolBin env a b = do
@@ -238,6 +277,7 @@ typesEqual TUnit TUnit = True
 typesEqual (TRecord as) (TRecord bs) = length as == length bs && and (zipWith fieldEq as bs)
   where
     fieldEq (n1, t1) (n2, t2) = n1 == n2 && typesEqual t1 t2
+typesEqual (TList la) (TList lb) = typesEqual la lb
 typesEqual _ _ = False
 
 prettyType :: Type -> String
@@ -252,3 +292,4 @@ prettyType (TRecord fs) =
       , let lastI = length fs - 1
       ]
     ++ "}"
+prettyType (TList t) = "list<" ++ prettyType t ++ ">"
