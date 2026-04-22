@@ -30,6 +30,7 @@ reservedWords =
   , "int"
   , "bool"
   , "unit"
+  , "string"
   , "return"
   , "if"
   , "else"
@@ -61,6 +62,7 @@ parseType = parseRecordType <|> parsePrimitiveType
       (reserved "int" >> return TInt)
         <|> (reserved "bool" >> return TBool)
         <|> (reserved "unit" >> return TUnit)
+        <|> (reserved "string" >> return TString)
 
     parseRecordType :: Parser Type
     parseRecordType = do
@@ -118,6 +120,7 @@ parseAtom :: Parser Expr
 parseAtom =
   parseUnit
     <|> parseRecordExpr
+    <|> parseString
     <|> parseBool
     <|> parseInt
     <|> parseVar
@@ -130,8 +133,25 @@ parseStorageExpr = do
 
 parseInt :: Parser Expr
 parseInt = CInt <$> lexeme L.decimal
+String :: Parser Expr
+parseString = CString <$> lexeme parseStringLiteral
+  where
+    parseStringLiteral = between (char '"') (char '"') (many parseStringChar)
+    parseStringChar = parseEscapeSeq <|> noneOf "\""
+    parseEscapeSeq =
+      (char '\\' >> char 'n' >> return '\n')
+        <|> (char '\\' >> char 't' >> return '\t')
+        <|> (char '\\' >> char 'r' >> return '\r')
+        <|> (char '\\' >> char '\\' >> return '\\')
+        <|> (char '\\' >> char '"' >> return '"')
 
 parseVar :: Parser Expr
+parseVar = do
+  name <- parseName
+  maybeFuncCall <- optional (parens (sepBy parseExpr (symbol ",")))
+  case maybeFuncCall of
+    Just args -> return $ Call name args
+    Nothing -> return $ Var n
 parseVar = Var <$> parseName
 
 parseBool :: Parser Expr

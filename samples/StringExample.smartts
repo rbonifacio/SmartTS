@@ -1,0 +1,38 @@
+contract StringContract {
+  storage: {
+    message: string,
+    length: int
+  };
+
+  @originate
+  init(initialMessage: string): unit {
+    storage.message = initialMessage;
+    storage.length = string_length(initialMessage);
+    return ();
+  }
+
+  @entrypoint
+  appendMessage(suffix: string): string {
+    val newMessage: string = string_concat(storage.message, suffix);
+    storage.message = newMessage;
+    storage.length = string_length(newMessage);
+    return newMessage;
+  }
+
+  @entrypoint
+  toUppercase(): string {
+    val uppercased: string = string_uppercase(storage.message);
+    return uppercased;
+  }
+
+  @entrypoint
+  toLowercase(): string {
+    val lowercased: string = string_lowercase(storage.message);
+    return lowercased;
+  }
+
+  @entrypoint
+  getLength(): int {
+    return storage.length;
+  }
+}

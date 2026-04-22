@@ -150,12 +150,14 @@ typeOfLValue env (LField root fld) = do
 inferExpr :: TcEnv -> Expr -> Either String Type
 inferExpr _ (CInt _) = Right TInt
 inferExpr _ (CBool _) = Right TBool
+inferExpr _ (CString _) = Right TString
 inferExpr _ Unit = Right TUnit
 inferExpr env StorageExpr = pure (envStorageType env)
 inferExpr env (Var n) =
   case M.lookup n (envBindings env) of
     Nothing -> Left $ "Unknown variable `" ++ n ++ "`."
     Just b -> Right (bindingType b)
+inferExpr env (Call fname args) = inferCall env fname args
 inferExpr env (FieldAccess e fld) = do
   t <- inferExpr env e
   case t of
@@ -170,7 +172,7 @@ inferExpr env (Not e) = do
   return TBool
 inferExpr env (And a b) = inferBoolBin env a b
 inferExpr env (Or a b) = inferBoolBin env a b
-inferExpr env (Add a b) = inferIntBin env a b
+inferExpr env (Add a b) = inferStringOrIntBin env a b
 inferExpr env (Sub a b) = inferIntBin env a b
 inferExpr env (Mul a b) = inferIntBin env a b
 inferExpr env (Div a b) = inferIntBin env a b
@@ -200,6 +202,50 @@ inferIntBin env a b = do
   expectType "left operand of arithmetic operator" ta TInt
   expectType "right operand of arithmetic operator" tb TInt
   return TInt
+
+inferStringOrIntBin :: TcEnv -> Expr -> Expr -> Either String Type
+inferStringOrIntBin env a b = do
+  ta <- inferExpr env a
+  tb <- inferExpr env b
+  case (ta, tb) of
+    (TString, TString) -> return TString
+    (TInt, TInt) -> return TInt
+    _ -> Left "Operands of + must both be int or both be string (or their concatenation is not supported)"
+
+inferCall :: TcEnv -> Name -> [Expr] -> Either String Type
+inferCall env fname args =
+  case fname of
+    "string_concat" -> do
+      case args of
+        [a, b] -> do
+          ta <- inferExpr env a
+          tb <- inferExpr env b
+          expectType "first argument of string_concat" ta TString
+          expectType "second argument of string_concat" tb TString
+          return TString
+        _ -> Left "string_concat requires exactly 2 arguments"
+    "string_length" -> do
+      case args of
+        [a] -> do
+          ta <- inferExpr env a
+          expectType "argument of string_length" ta TString
+          return TInt
+        _ -> Left "string_length requires exactly 1 argument"
+    "string_uppercase" -> do
+      case args of
+        [a] -> do
+          ta <- inferExpr env a
+          expectType "argument of string_uppercase" ta TString
+          return TString
+        _ -> Left "string_uppercase requires exactly 1 argument"
+    "string_lowercase" -> do
+      case args of
+        [a] -> do
+          ta <- inferExpr env a
+          expectType "argument of string_lowercase" ta TString
+          return TString
+        _ -> Left "string_lowercase requires exactly 1 argument"
+    _ -> Left $ "Unknown function: " ++ fname
 
 inferIntCmp :: TcEnv -> Expr -> Expr -> Either String Type
 inferIntCmp env a b = do
@@ -234,6 +280,7 @@ expectType ctx got expected =
 typesEqual :: Type -> Type -> Bool
 typesEqual TInt TInt = True
 typesEqual TBool TBool = True
+typesEqual TString TString = True
 typesEqual TUnit TUnit = True
 typesEqual (TRecord as) (TRecord bs) = length as == length bs && and (zipWith fieldEq as bs)
   where
@@ -243,6 +290,7 @@ typesEqual _ _ = False
 prettyType :: Type -> String
 prettyType TInt = "int"
 prettyType TBool = "bool"
+prettyType TString = "string"
 prettyType TUnit = "unit"
 prettyType (TRecord fs) =
   "{"

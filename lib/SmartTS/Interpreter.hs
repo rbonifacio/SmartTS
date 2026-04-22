@@ -11,6 +11,7 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.ByteString.Lazy (fromStrict)
 import Data.Char (isDigit, isHexDigit, toLower)
+import qualified Data.Char as Char
 import Data.Digest.Pure.SHA (sha256, showDigest)
 import Data.List (stripPrefix)
 import qualified Data.Map.Strict as M
@@ -96,6 +97,7 @@ generateAddress sourceText instanceId =
 exprToJson :: Expr -> Value
 exprToJson (CInt n) = Number (fromIntegral n)
 exprToJson (CBool b) = Bool b
+exprToJson (CString s) = String (T.pack s)
 exprToJson (Record fields) =
   Object $
     KM.fromList
@@ -111,6 +113,7 @@ jsonToExprByType TInt (Number n) =
     Right i -> Right (CInt i)
     Left _ -> Left "Expected integer number for int type."
 jsonToExprByType TBool (Bool b) = Right (CBool b)
+jsonToExprByType TString (String s) = Right (CString (T.unpack s))
 jsonToExprByType (TRecord fieldsT) (Object obj) = do
   fields <- mapM (decodeField obj) fieldsT
   Right (Record fields)
@@ -128,6 +131,7 @@ jsonToExprUntyped (Number n) =
   case floatingOrInteger n :: Either Double Int of
     Right i -> Right (CInt i)
     Left _ -> Left "Only integer numbers are currently supported."
+jsonToExprUntyped (String s) = Right (CString (T.unpack s))
 jsonToExprUntyped (Bool b) = Right (CBool b)
 jsonToExprUntyped Null = Right Unit
 jsonToExprUntyped (Object obj) = do
@@ -302,6 +306,7 @@ execSequence rt (s:ss) = do
 evalExpr :: Runtime -> Expr -> Either String Expr
 evalExpr _ c@(CInt _) = Right c
 evalExpr _ c@(CBool _) = Right c
+evalExpr _ c@(CString _) = Right c
 evalExpr _ Unit = Right Unit
 evalExpr rt StorageExpr =
   case rtStorage rt of
@@ -314,6 +319,7 @@ evalExpr rt (Var n) =
       case M.lookup n (rtParams rt) of
         Just v -> Right v
         Nothing -> interpretBug ("unknown variable `" ++ n ++ "` after type check")
+evalExpr rt (Call fname args) = evalCall rt fname args
 evalExpr rt (Record fields) = do
   fs <- mapM (\(k, e) -> (,) k <$> evalExpr rt e) fields
   Right (Record fs)
@@ -332,7 +338,13 @@ evalExpr rt (Not e) = do
     _ -> interpretBug "operand of ! was not bool after type check"
 evalExpr rt (And a b) = boolBin rt a b (&&)
 evalExpr rt (Or a b) = boolBin rt a b (||)
-evalExpr rt (Add a b) = intBin rt a b (+)
+evalExpr rt (Add a b) = do
+  av <- evalExpr rt a
+  bv <- evalExpr rt b
+  case (av, bv) of
+    (CInt x, CInt y) -> Right (CInt (x + y))
+    (CString x, CString y) -> Right (CString (x ++ y))
+    _ -> interpretBug "Add operands have incompatible types after type check"
 evalExpr rt (Sub a b) = intBin rt a b (-)
 evalExpr rt (Mul a b) = intBin rt a b (*)
 evalExpr rt (Div a b) = do
@@ -349,6 +361,44 @@ evalExpr rt (Lt a b) = intCmp rt a b (<)
 evalExpr rt (Lte a b) = intCmp rt a b (<=)
 evalExpr rt (Gt a b) = intCmp rt a b (>)
 evalExpr rt (Gte a b) = intCmp rt a b (>=)
+
+evalCall :: Runtime -> Name -> [Expr] -> Either String Expr
+evalCall rt fname args =
+  case fname of
+    "string_concat" -> do
+      case args of
+        [a, b] -> do
+          av <- evalExpr rt a
+          bv <- evalExpr rt b
+          case (av, bv) of
+            (CString x, CString y) -> Right (CString (x ++ y))
+            _ -> interpretBug "string_concat operands were not strings after type check"
+        _ -> interpretBug "string_concat requires 2 arguments after type check"
+    "string_length" -> do
+      case args of
+        [a] -> do
+          av <- evalExpr rt a
+          case av of
+            CString s -> Right (CInt (length s))
+            _ -> interpretBug "string_length operand was not a string after type check"
+        _ -> interpretBug "string_length requires 1 argument after type check"
+    "string_uppercase" -> do
+      case args of
+        [a] -> do
+          av <- evalExpr rt a
+          case av of
+            CString s -> Right (CString (map Char.toUpper s))
+            _ -> interpretBug "string_uppercase operand was not a string after type check"
+        _ -> interpretBug "string_uppercase requires 1 argument after type check"
+    "string_lowercase" -> do
+      case args of
+        [a] -> do
+          av <- evalExpr rt a
+          case av of
+            CString s -> Right (CString (map Char.toLower s))
+            _ -> interpretBug "string_lowercase operand was not a string after type check"
+        _ -> interpretBug "string_lowercase requires 1 argument after type check"
+    _ -> interpretBug $ "Unknown function: " ++ fname
 
 assignLValue :: Runtime -> LValue -> Expr -> Either String Runtime
 assignLValue rt LStorage v = Right rt {rtStorage = Just v}

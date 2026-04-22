@@ -29,6 +29,7 @@ type ReturnType = Type
 data Type = TInt
           | TBool
           | TUnit
+          | TString
           | TRecord [(Name, Type)]
   deriving (Eq, Show)
 
@@ -36,6 +37,7 @@ type Name = String
 
 data Expr = CInt Int
           | CBool Bool
+          | CString String
           | StorageExpr
           | Var Name
           | FieldAccess Expr Name
@@ -53,6 +55,7 @@ data Expr = CInt Int
           | Lte Expr Expr
           | Gt Expr Expr
           | Gte Expr Expr
+          | Call Name [Expr]
           | Record [(Name, Expr)]
           | Unit
   deriving (Eq, Show)

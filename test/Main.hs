@@ -25,6 +25,7 @@ tests =
         , expressionTests
         , statementTests
         , errorTests
+        , stringTests
         ]
     , typeCheckTests
     ]
@@ -501,4 +502,95 @@ errorTests = testGroup "Error Cases"
   
   , testCase "Invalid expression syntax" $
       parseFailure "contract Test { storage: { x: int }; @entrypoint test(): int { return +; } }"
+  ]
+
+stringTests :: TestTree
+stringTests = testGroup "String Type and Operations"
+  [ testCase "String literal parsing" $
+      parseSuccess "contract Test { storage: { x: string }; @originate init(): string { return \"hello\"; } }" $ \contract ->
+        case contract of
+          Contract _ [("x", TString)] [MethodDecl Originate "init" [] TString (SequenceStmt [ReturnStmt (CString "hello")])] ->
+            return ()
+          _ -> assertFailure $ "Expected string literal, got: " ++ show contract
+
+  , testCase "String storage field type" $
+      parseSuccess "contract Test { storage: { name: string }; @originate init(): unit { return (); } }" $ \contract ->
+        case contract of
+          Contract _ storage _ ->
+            case lookup "name" storage of
+              Just TString -> return ()
+              _ -> assertFailure "Expected string type in storage"
+          _ -> assertFailure "Unexpected contract structure"
+
+  , testCase "String concatenation function call" $
+      parseSuccess "contract Test { storage: { x: string }; @entrypoint concat(): string { return string_concat(\"hello\", \"world\"); } }" $ \contract ->
+        case contract of
+          Contract _ _ [MethodDecl EntryPoint "concat" [] TString (SequenceStmt [ReturnStmt (Call "string_concat" [CString "hello", CString "world"])])] ->
+            return ()
+          _ -> assertFailure $ "Expected string_concat function call, got: " ++ show contract
+
+  , testCase "String length function call" $
+      parseSuccess "contract Test { storage: { x: string }; @entrypoint len(): int { return string_length(\"test\"); } }" $ \contract ->
+        case contract of
+          Contract _ _ [MethodDecl EntryPoint "len" [] TInt (SequenceStmt [ReturnStmt (Call "string_length" [CString "test"])])] ->
+            return ()
+          _ -> assertFailure $ "Expected string_length function call, got: " ++ show contract
+
+  , testCase "String uppercase function call" $
+      parseSuccess "contract Test { storage: { x: string }; @entrypoint upper(): string { return string_uppercase(\"hello\"); } }" $ \contract ->
+        case contract of
+          Contract _ _ [MethodDecl EntryPoint "upper" [] TString (SequenceStmt [ReturnStmt (Call "string_uppercase" [CString "hello"])])] ->
+            return ()
+          _ -> assertFailure $ "Expected string_uppercase function call, got: " ++ show contract
+
+  , testCase "String lowercase function call" $
+      parseSuccess "contract Test { storage: { x: string }; @entrypoint lower(): string { return string_lowercase(\"HELLO\"); } }" $ \contract ->
+        case contract of
+          Contract _ _ [MethodDecl EntryPoint "lower" [] TString (SequenceStmt [ReturnStmt (Call "string_lowercase" [CString "HELLO"])])] ->
+            return ()
+          _ -> assertFailure $ "Expected string_lowercase function call, got: " ++ show contract
+
+  , testCase "String equality check" $
+      typeCheckSuccess "contract Test { storage: { x: string }; @originate init(): bool { return \"hello\" == \"hello\"; } }"
+
+  , testCase "String inequality check" $
+      typeCheckSuccess "contract Test { storage: { x: string }; @originate init(): bool { return \"hello\" != \"world\"; } }"
+
+  , testCase "String concatenation with + operator" $
+      typeCheckSuccess "contract Test { storage: { x: string }; @originate init(): string { return \"hello\" + \"world\"; } }"
+
+  , testCase "String concatenation type check should fail for int + string" $
+      typeCheckFailure "contract Test { storage: { x: string }; @originate init(): string { return 1 + \"world\"; } }"
+
+  , testCase "String type in var declaration" $
+      parseSuccess "contract Test { storage: { x: string }; @entrypoint test(): string { var s: string = \"hello\"; return s; } }" $ \contract ->
+        case contract of
+          Contract _ _ [MethodDecl EntryPoint "test" [] TString (SequenceStmt [VarDeclStmt "s" TString (CString "hello"), ReturnStmt (Var "s")])] ->
+            return ()
+          _ -> assertFailure $ "Expected var declaration with string type, got: " ++ show contract
+
+  , testCase "String type in val declaration" $
+      typeCheckSuccess "contract Test { storage: { x: string }; @entrypoint test(): string { val s: string = \"hello\"; return s; } }"
+
+  , testCase "string_concat type check - requires both arguments to be strings" $
+      typeCheckFailure "contract Test { storage: { x: string }; @originate init(): string { return string_concat(\"hello\", 123); } }"
+
+  , testCase "string_length type check - requires argument to be string" $
+      typeCheckFailure "contract Test { storage: { x: string }; @originate init(): int { return string_length(123); } }"
+
+  , testCase "string_uppercase type check - requires argument to be string" $
+      typeCheckFailure "contract Test { storage: { x: string }; @originate init(): string { return string_uppercase(123); } }"
+
+  , testCase "string_lowercase type check - requires argument to be string" $
+      typeCheckFailure "contract Test { storage: { x: string }; @originate init(): string { return string_lowercase(false); } }"
+
+  , testCase "String with escape sequences" $
+      parseSuccess "contract Test { storage: { x: string }; @originate init(): string { return \"hello\\nworld\"; } }" $ \contract ->
+        case contract of
+          Contract _ _ [MethodDecl Originate "init" [] TString (SequenceStmt [ReturnStmt (CString s)])] ->
+            -- The parser should process escape sequences
+            case s of
+              "hello\nworld" -> return ()
+              _ -> assertFailure $ "Expected escaped newline, got: " ++ show s
+          _ -> assertFailure $ "Unexpected contract structure, got: " ++ show contract
   ]
