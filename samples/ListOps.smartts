@@ -1,0 +1,32 @@
+contract ListOps {
+  storage: {
+    xs: list<int>
+  };
+
+  @originate
+  init(): unit {
+    storage.xs = list<int>(1, 2, 3);
+    return ();
+  }
+
+  @entrypoint
+  headValue(): int {
+    return storage.xs.head;
+  }
+
+  @entrypoint
+  tailList(): list<int> {
+    return storage.xs.tail;
+  }
+
+  @entrypoint
+  length(): int {
+    return storage.xs.size;
+  }
+
+  @entrypoint
+  prependZero(): unit {
+    storage.xs = storage.xs.cons(0);
+    return ();
+  }
+}

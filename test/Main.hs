@@ -297,6 +297,56 @@ expressionTests = testGroup "Expression Parsing"
             ] ->
               return ()
           _ -> assertFailure $ "Expected projection on record literal, got: " ++ show contract
+
+  , testCase "Typed list literal expression" $
+      parseSuccess "contract Test { storage: { x: int }; @entrypoint nums(): list<int> { return list<int>(1, 2, 3); } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "nums" [] (TList TInt)
+                (SequenceStmt [ReturnStmt (List TInt [CInt 1, CInt 2, CInt 3])])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected typed list literal, got: " ++ show contract
+
+  , testCase "List head expression (member syntax)" $
+      parseSuccess "contract Test { storage: { xs: list<int> }; @entrypoint h(): int { return xs.head; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "h" [] TInt
+                (SequenceStmt [ReturnStmt (ListHead (Var "xs"))])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected xs.head, got: " ++ show contract
+
+  , testCase "List tail expression (member syntax)" $
+      parseSuccess "contract Test { storage: { xs: list<int> }; @entrypoint t(): list<int> { return xs.tail; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "t" [] (TList TInt)
+                (SequenceStmt [ReturnStmt (ListTail (Var "xs"))])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected xs.tail, got: " ++ show contract
+
+  , testCase "List size expression (member syntax)" $
+      parseSuccess "contract Test { storage: { xs: list<int> }; @entrypoint s(): int { return xs.size; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "s" [] TInt
+                (SequenceStmt [ReturnStmt (ListSize (Var "xs"))])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected xs.size, got: " ++ show contract
+
+  , testCase "List cons expression (member syntax)" $
+      parseSuccess "contract Test { storage: { xs: list<int> }; @entrypoint c(): list<int> { return xs.cons(0); } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "c" [] (TList TInt)
+                (SequenceStmt [ReturnStmt (ListCons (CInt 0) (Var "xs"))])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected xs.cons(0), got: " ++ show contract
   ]
 
 statementTests :: TestTree
@@ -434,6 +484,18 @@ statementTests = testGroup "Statement Parsing"
             ] ->
               return ()
           _ -> assertFailure $ "Expected local record field assignment, got: " ++ show contract
+
+  , testCase "forEach statement" $
+      parseSuccess "contract Test { storage: { xs: list<int> }; @entrypoint each(): unit { forEach(e: xs) { return (); } } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "each" [] TUnit
+                (SequenceStmt
+                  [ ForEachStmt "e" (Var "xs") (SequenceStmt [ReturnStmt Unit])
+                  ])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected forEach statement, got: " ++ show contract
   ]
 
 typeCheckTests :: TestTree
@@ -472,6 +534,33 @@ typeCheckTests =
               Left err -> assertFailure err
               Right (ContractInstance _ st) -> case st of
                 Record [("n", CInt 1), ("b", CBool True)] -> return ()
+                _ -> assertFailure $ "unexpected storage expr: " ++ show st
+    , testCase "List operations type-check" $
+        typeCheckSuccess
+          "contract C { storage: { xs: list<int> }; @entrypoint ok(): int { val ys: list<int> = storage.xs.cons(0); val zs: list<int> = ys.tail; val h: int = ys.head; return h + ys.size + zs.size; } }"
+    , testCase "head requires list" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @entrypoint bad(): int { return x.head; } }"
+    , testCase "cons element must match list element type" $
+        typeCheckFailure
+          "contract C { storage: { xs: list<int> }; @entrypoint bad(): list<int> { return xs.cons(true); } }"
+    , testCase "forEach iterable must be list" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @entrypoint bad(): unit { forEach(e: x) { return (); } } }"
+    , testCase "forEach binds element type" $
+        typeCheckSuccess
+          "contract C { storage: { xs: list<int> }; @entrypoint sum(): int { var acc: int = 0; forEach(e: storage.xs) { acc = acc + e; } return acc; } }"
+    , testCase "forEach loop variable conflicts with existing local" $
+        typeCheckFailure
+          "contract C { storage: { xs: list<int> }; @entrypoint bad(): unit { var e: int = 0; forEach(e: xs) { return (); } return (); } }"
+    , testCase "Persisted storage decodes list type" $
+        parseSuccess
+          "contract C { storage: { xs: list<int> }; @originate init(): unit { return (); } }"
+          $ \c ->
+            case contractInstanceFromStorageValue c (object ["xs" .= ([1 :: Int, 2, 3] :: [Int])]) of
+              Left err -> assertFailure err
+              Right (ContractInstance _ st) -> case st of
+                Record [("xs", List TInt [CInt 1, CInt 2, CInt 3])] -> return ()
                 _ -> assertFailure $ "unexpected storage expr: " ++ show st
     ]
 

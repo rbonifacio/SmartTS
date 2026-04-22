@@ -6,12 +6,13 @@
 -- internal bugs ("interpretBug") rather than user-facing "Left" errors.
 module SmartTS.Interpreter where
 
-import Data.Aeson (Value(..))
+import Data.Aeson (Value(..), toJSON)
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.ByteString.Lazy (fromStrict)
 import Data.Char (isDigit, isHexDigit, toLower)
 import Data.Digest.Pure.SHA (sha256, showDigest)
+import Data.Foldable (toList)
 import Data.List (stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Scientific (floatingOrInteger)
@@ -102,6 +103,7 @@ exprToJson (Record fields) =
       [ (fromStringKey k, exprToJson v)
       | (k, v) <- fields
       ]
+exprToJson (List _ elems) = toJSON (map exprToJson elems)
 exprToJson Unit = Null
 exprToJson _ = Null
 
@@ -121,6 +123,9 @@ jsonToExprByType (TRecord fieldsT) (Object obj) = do
         Just v -> do
           ev <- jsonToExprByType ftype v
           Right (fname, ev)
+jsonToExprByType (TList elemType) (Array arr) = do
+  elems <- mapM (jsonToExprByType elemType) (toList arr)
+  Right (List elemType elems)
 jsonToExprByType _ _ = Left "JSON value does not match the expected SmartTS type."
 
 jsonToExprUntyped :: Value -> Either String Expr
@@ -290,6 +295,24 @@ execStmt rt (WhileStmt cond body) = loop rt
             Just v -> Right (Just v, next)
             Nothing -> loop next
         _ -> interpretBug "while condition was not bool after type check"
+execStmt rt (ForEachStmt varName listExpr body) = do
+  listVal <- evalExpr rt listExpr
+  case listVal of
+    List _ elems -> loop rt elems
+    _ -> interpretBug "forEach iterable was not list after type check"
+  where
+    loop cur [] = Right (Nothing, cur)
+    loop cur (el:rest) = do
+      let bodyRt =
+            cur
+              { rtLocals =
+                  M.insert varName (Binding False el) (rtLocals cur)
+              }
+      (ret, next) <- execStmt bodyRt body
+      let nextNoVar = next {rtLocals = M.delete varName (rtLocals next)}
+      case ret of
+        Just v -> Right (Just v, nextNoVar)
+        Nothing -> loop nextNoVar rest
 
 execSequence :: Runtime -> [Stmt] -> Either String (Maybe Expr, Runtime)
 execSequence rt [] = Right (Nothing, rt)
@@ -317,6 +340,9 @@ evalExpr rt (Var n) =
 evalExpr rt (Record fields) = do
   fs <- mapM (\(k, e) -> (,) k <$> evalExpr rt e) fields
   Right (Record fs)
+evalExpr rt (List t elems) = do
+  vs <- mapM (evalExpr rt) elems
+  Right (List t vs)
 evalExpr rt (FieldAccess base fld) = do
   b <- evalExpr rt base
   case b of
@@ -349,6 +375,29 @@ evalExpr rt (Lt a b) = intCmp rt a b (<)
 evalExpr rt (Lte a b) = intCmp rt a b (<=)
 evalExpr rt (Gt a b) = intCmp rt a b (>)
 evalExpr rt (Gte a b) = intCmp rt a b (>=)
+evalExpr rt (ListHead e) = do
+  v <- evalExpr rt e
+  case v of
+    List _ [] -> Left "Head of empty list."
+    List _ (x:_) -> Right x
+    _ -> interpretBug "head on non-list after type check"
+evalExpr rt (ListTail e) = do
+  v <- evalExpr rt e
+  case v of
+    List _ [] -> Left "Tail of empty list."
+    List t (_:xs) -> Right (List t xs)
+    _ -> interpretBug "tail on non-list after type check"
+evalExpr rt (ListSize e) = do
+  v <- evalExpr rt e
+  case v of
+    List _ elems -> Right (CInt (length elems))
+    _ -> interpretBug "size on non-list after type check"
+evalExpr rt (ListCons el lst) = do
+  vEl <- evalExpr rt el
+  vLst <- evalExpr rt lst
+  case vLst of
+    List t elems -> Right (List t (vEl : elems))
+    _ -> interpretBug "cons on non-list after type check"
 
 assignLValue :: Runtime -> LValue -> Expr -> Either String Runtime
 assignLValue rt LStorage v = Right rt {rtStorage = Just v}
