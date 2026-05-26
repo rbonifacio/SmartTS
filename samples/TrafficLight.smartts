@@ -1,0 +1,37 @@
+contract TrafficLight {
+  storage: {
+    light: Light,
+    cycles: int
+  };
+
+  enum Light { Red, Yellow, Green }
+
+  @originate
+  init(): unit {
+    storage.light = Red;
+    storage.cycles = 0;
+    return ();
+  }
+
+  @entrypoint
+  next(): unit {
+    match (storage.light) {
+      Red => {
+        storage.light = Green;
+      }
+      Green => {
+        storage.light = Yellow;
+      }
+      Yellow => {
+        storage.light = Red;
+        storage.cycles = storage.cycles + 1;
+      }
+    }
+    return ();
+  }
+
+  @entrypoint
+  state(): pair<int, int> {
+    return pair(storage.cycles, 0);
+  }
+}

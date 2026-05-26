@@ -10,11 +10,12 @@ import Data.Aeson (Value(..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.ByteString.Lazy (fromStrict)
-import Data.Char (isDigit, isHexDigit, toLower)
+import Data.Char (isDigit, isHexDigit, isUpper, toLower)
 import Data.Digest.Pure.SHA (sha256, showDigest)
 import Data.List (stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Scientific (floatingOrInteger)
+import qualified Data.Vector as V
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8)
 import SmartTS.AST
@@ -103,6 +104,8 @@ exprToJson (Record fields) =
       | (k, v) <- fields
       ]
 exprToJson Unit = Null
+exprToJson (PairExpr a b) = Array (V.fromList [exprToJson a, exprToJson b])
+exprToJson (EnumLiteral n) = String (T.pack n)
 exprToJson _ = Null
 
 jsonToExprByType :: Type -> Value -> Either String Expr
@@ -121,6 +124,13 @@ jsonToExprByType (TRecord fieldsT) (Object obj) = do
         Just v -> do
           ev <- jsonToExprByType ftype v
           Right (fname, ev)
+jsonToExprByType (TPair t1 t2) (Array arr)
+  | V.length arr == 2 = do
+      v1 <- jsonToExprByType t1 (arr V.! 0)
+      v2 <- jsonToExprByType t2 (arr V.! 1)
+      Right (PairExpr v1 v2)
+  | otherwise = Left "Expected a 2-element JSON array for pair type."
+jsonToExprByType (TEnum _) (String s) = Right (EnumLiteral (T.unpack s))
 jsonToExprByType _ _ = Left "JSON value does not match the expected SmartTS type."
 
 jsonToExprUntyped :: Value -> Either String Expr
@@ -137,7 +147,15 @@ jsonToExprUntyped (Object obj) = do
     decodeKV (k, v) = do
       ev <- jsonToExprUntyped v
       Right (toStringKey k, ev)
-jsonToExprUntyped _ = Left "Unsupported JSON value for SmartTS expression."
+jsonToExprUntyped (Array arr)
+  | V.length arr == 2 = do
+      v1 <- jsonToExprUntyped (arr V.! 0)
+      v2 <- jsonToExprUntyped (arr V.! 1)
+      Right (PairExpr v1 v2)
+  | otherwise = Left "Only 2-element JSON arrays are supported as pair values."
+jsonToExprUntyped (String s)
+  | not (T.null s) && isUpper (T.head s) = Right (EnumLiteral (T.unpack s))
+  | otherwise = Left "String JSON values must be uppercase-initial enum variant names."
 
 -- | Decode persisted @storage@ JSON using the contract\'s declared storage record type.
 contractInstanceFromStorageValue :: Contract -> Value -> Either String ContractInstance
@@ -290,6 +308,30 @@ execStmt rt (WhileStmt cond body) = loop rt
             Just v -> Right (Just v, next)
             Nothing -> loop next
         _ -> interpretBug "while condition was not bool after type check"
+execStmt rt (VarDestructStmt n1 n2 _ e) = do
+  v <- evalExpr rt e
+  case v of
+    PairExpr v1 v2 ->
+      let locals' = M.insert n1 (Binding True v1)
+                  $ M.insert n2 (Binding True v2) (rtLocals rt)
+      in Right (Nothing, rt {rtLocals = locals'})
+    _ -> interpretBug "destructuring non-pair value after type check"
+execStmt rt (ValDestructStmt n1 n2 _ e) = do
+  v <- evalExpr rt e
+  case v of
+    PairExpr v1 v2 ->
+      let locals' = M.insert n1 (Binding False v1)
+                  $ M.insert n2 (Binding False v2) (rtLocals rt)
+      in Right (Nothing, rt {rtLocals = locals'})
+    _ -> interpretBug "destructuring non-pair value after type check"
+execStmt rt (MatchStmt e arms) = do
+  v <- evalExpr rt e
+  case v of
+    EnumLiteral variant ->
+      case lookup variant arms of
+        Just body -> execStmt rt body
+        Nothing   -> interpretBug ("unmatched variant `" ++ variant ++ "` after exhaustiveness check")
+    _ -> interpretBug "match on non-enum value after type check"
 
 execSequence :: Runtime -> [Stmt] -> Either String (Maybe Expr, Runtime)
 execSequence rt [] = Right (Nothing, rt)
@@ -317,6 +359,21 @@ evalExpr rt (Var n) =
 evalExpr rt (Record fields) = do
   fs <- mapM (\(k, e) -> (,) k <$> evalExpr rt e) fields
   Right (Record fs)
+evalExpr rt (PairExpr e1 e2) = do
+  v1 <- evalExpr rt e1
+  v2 <- evalExpr rt e2
+  return (PairExpr v1 v2)
+evalExpr rt (Fst e) = do
+  v <- evalExpr rt e
+  case v of
+    PairExpr v1 _ -> Right v1
+    _ -> interpretBug "fst on non-pair value after type check"
+evalExpr rt (Snd e) = do
+  v <- evalExpr rt e
+  case v of
+    PairExpr _ v2 -> Right v2
+    _ -> interpretBug "snd on non-pair value after type check"
+evalExpr _ e@(EnumLiteral _) = Right e
 evalExpr rt (FieldAccess base fld) = do
   b <- evalExpr rt base
   case b of

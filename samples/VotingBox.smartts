@@ -1,0 +1,43 @@
+contract VotingBox {
+  storage: {
+    phase: Phase,
+    result: pair<int, int>,
+    votesFor: int,
+    votesAgainst: int
+  };
+
+  enum Phase { Open, Closed }
+
+  @originate
+  init(): unit {
+    storage.phase        = Open;
+    storage.votesFor     = 0;
+    storage.votesAgainst = 0;
+    storage.result       = pair(0, 0);
+    return ();
+  }
+
+  @entrypoint
+  vote(inFavor: bool): unit {
+    match (storage.phase) {
+      Open => {
+        if (inFavor) {
+          storage.votesFor = storage.votesFor + 1;
+        } else {
+          storage.votesAgainst = storage.votesAgainst + 1;
+        }
+      }
+      Closed => {
+        storage.votesFor = storage.votesFor;
+      }
+    }
+    return ();
+  }
+
+  @entrypoint
+  close(): pair<int, int> {
+    storage.phase  = Closed;
+    storage.result = pair(storage.votesFor, storage.votesAgainst);
+    return storage.result;
+  }
+}

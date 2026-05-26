@@ -25,19 +25,10 @@ symbol = L.symbol spaceConsumer
 -- Keywords and identifiers
 reservedWords :: [String]
 reservedWords =
-  [ "contract"
-  , "storage"
-  , "int"
-  , "bool"
-  , "unit"
-  , "return"
-  , "if"
-  , "else"
-  , "while"
-  , "var"
-  , "val"
-  , "true"
-  , "false"
+  [ "contract", "storage", "int", "bool", "unit"
+  , "return", "if", "else", "while", "var", "val"
+  , "true", "false"
+  , "pair", "fst", "snd", "enum", "match"
   ]
 
 identifier :: Parser String
@@ -49,16 +40,25 @@ identifier = lexeme $ do
     then fail $ "reserved word: " ++ name
     else return name
 
+upperIdentifier :: Parser Name
+upperIdentifier = lexeme $ do
+  first <- upperChar
+  rest  <- many (alphaNumChar <|> char '_')
+  let name = first : rest
+  if name `elem` reservedWords
+    then fail $ "reserved word: " ++ name
+    else return name
+
 reserved :: String -> Parser String
 reserved = symbol
 
 -- Types
 parseType :: Parser Type
-parseType = parseRecordType <|> parsePrimitiveType
+parseType = parsePairType <|> parseRecordType <|> parsePrimitiveType <|> parseEnumTypeRef
   where
     parsePrimitiveType :: Parser Type
     parsePrimitiveType =
-      (reserved "int" >> return TInt)
+      (reserved "int"  >> return TInt)
         <|> (reserved "bool" >> return TBool)
         <|> (reserved "unit" >> return TUnit)
 
@@ -73,6 +73,19 @@ parseType = parseRecordType <|> parsePrimitiveType
       _ <- symbol ":"
       typ <- parseType
       return (name, typ)
+
+parsePairType :: Parser Type
+parsePairType = do
+  _ <- symbol "pair"
+  _ <- symbol "<"
+  t1 <- parseType
+  _ <- symbol ","
+  t2 <- parseType
+  _ <- symbol ">"
+  return (TPair t1 t2)
+
+parseEnumTypeRef :: Parser Type
+parseEnumTypeRef = TEnum <$> upperIdentifier
 
 -- Names
 parseName :: Parser Name
@@ -117,9 +130,13 @@ parseAtomOrStorage =
 parseAtom :: Parser Expr
 parseAtom =
   parseUnit
+    <|> parsePairExpr
+    <|> parseFstExpr
+    <|> parseSndExpr
     <|> parseRecordExpr
     <|> parseBool
     <|> parseInt
+    <|> parseEnumLiteral
     <|> parseVar
     <|> parens parseExpr
 
@@ -156,6 +173,31 @@ parseUnit = do
   _ <- symbol "()"
   return Unit
 
+parsePairExpr :: Parser Expr
+parsePairExpr = do
+  _ <- symbol "pair"
+  _ <- symbol "("
+  e1 <- parseExpr
+  _ <- symbol ","
+  e2 <- parseExpr
+  _ <- symbol ")"
+  return (PairExpr e1 e2)
+
+parseFstExpr :: Parser Expr
+parseFstExpr = do
+  _ <- symbol "fst"
+  e <- parens parseExpr
+  return (Fst e)
+
+parseSndExpr :: Parser Expr
+parseSndExpr = do
+  _ <- symbol "snd"
+  e <- parens parseExpr
+  return (Snd e)
+
+parseEnumLiteral :: Parser Expr
+parseEnumLiteral = EnumLiteral <$> upperIdentifier
+
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
 
@@ -167,33 +209,64 @@ parseStmt :: Parser Stmt
 parseStmt =
   parseIfStmt
     <|> parseWhileStmt
-    <|> parseVarDeclStmt
-    <|> parseValDeclStmt
+    <|> parseMatchStmt
+    <|> parseVarStmt
+    <|> parseValStmt
     <|> parseReturn
     <|> parseAssignment
     <|> parseBlock
 
-parseVarDeclStmt :: Parser Stmt
-parseVarDeclStmt = do
-  _ <- reserved "var"
-  name <- parseName
-  _ <- symbol ":"
-  typ <- parseType
-  _ <- symbol "="
-  expr <- parseExpr
-  _ <- symbol ";"
-  return $ VarDeclStmt name typ expr
+parseVarStmt :: Parser Stmt
+parseVarStmt = do
+  _ <- symbol "var"
+  try parseVarDestructBody <|> parseVarDeclBody
+  where
+    parseVarDestructBody = do
+      _ <- symbol "("
+      n1 <- parseName
+      _ <- symbol ","
+      n2 <- parseName
+      _ <- symbol ")"
+      _ <- symbol ":"
+      t <- parseType
+      _ <- symbol "="
+      e <- parseExpr
+      _ <- symbol ";"
+      return (VarDestructStmt n1 n2 t e)
+    parseVarDeclBody = do
+      name <- parseName
+      _ <- symbol ":"
+      typ <- parseType
+      _ <- symbol "="
+      expr <- parseExpr
+      _ <- symbol ";"
+      return (VarDeclStmt name typ expr)
 
-parseValDeclStmt :: Parser Stmt
-parseValDeclStmt = do
-  _ <- reserved "val"
-  name <- parseName
-  _ <- symbol ":"
-  typ <- parseType
-  _ <- symbol "="
-  expr <- parseExpr
-  _ <- symbol ";"
-  return $ ValDeclStmt name typ expr
+parseValStmt :: Parser Stmt
+parseValStmt = do
+  _ <- symbol "val"
+  try parseValDestructBody <|> parseValDeclBody
+  where
+    parseValDestructBody = do
+      _ <- symbol "("
+      n1 <- parseName
+      _ <- symbol ","
+      n2 <- parseName
+      _ <- symbol ")"
+      _ <- symbol ":"
+      t <- parseType
+      _ <- symbol "="
+      e <- parseExpr
+      _ <- symbol ";"
+      return (ValDestructStmt n1 n2 t e)
+    parseValDeclBody = do
+      name <- parseName
+      _ <- symbol ":"
+      typ <- parseType
+      _ <- symbol "="
+      expr <- parseExpr
+      _ <- symbol ";"
+      return (ValDeclStmt name typ expr)
 
 parseIfStmt :: Parser Stmt
 parseIfStmt = do
@@ -241,6 +314,20 @@ parseBlock :: Parser Stmt
 parseBlock = do
   stmts <- braces (many parseStmt)
   return $ SequenceStmt stmts
+
+parseMatchStmt :: Parser Stmt
+parseMatchStmt = do
+  _ <- symbol "match"
+  e <- parens parseExpr
+  arms <- braces (many parseMatchArm)
+  return (MatchStmt e arms)
+
+parseMatchArm :: Parser (Name, Stmt)
+parseMatchArm = do
+  variant <- upperIdentifier
+  _ <- symbol "=>"
+  body <- parseBlock
+  return (variant, body)
 
 -- Storage
 parseStorage :: Parser Storage
@@ -293,6 +380,14 @@ parseMethod = do
         | otherwise = Private
   return $ MethodDecl kind name params returnType body
 
+-- Enum declarations
+parseEnumDecl :: Parser EnumDecl
+parseEnumDecl = do
+  _ <- symbol "enum"
+  name <- upperIdentifier
+  variants <- braces (sepBy upperIdentifier (symbol ","))
+  return (EnumDecl name variants)
+
 -- Contract
 parseContract :: Parser Contract
 parseContract = do
@@ -300,9 +395,10 @@ parseContract = do
   name <- parseName
   _ <- symbol "{"
   storage <- parseStorage
+  enums <- many parseEnumDecl
   methods <- many parseMethod
   _ <- symbol "}"
-  return $ Contract name storage methods
+  return $ Contract name storage enums methods
 
 -- Top-level parser
 parseProgram :: Parser Contract

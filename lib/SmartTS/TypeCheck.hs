@@ -4,7 +4,7 @@ module SmartTS.TypeCheck
   ( typeCheckContract
   ) where
 
-import Control.Monad (foldM, void)
+import Control.Monad (foldM, unless, void)
 import Data.List (nub)
 import qualified Data.Map.Strict as M
 import SmartTS.AST
@@ -20,17 +20,35 @@ data TcBinding = TcBinding
 
 -- | Environment for checking one method body.
 data TcEnv = TcEnv
-  { envStorageType :: Type
-  , envBindings :: M.Map Name TcBinding
-  , envReturnType :: Type
+  { envStorageType  :: Type
+  , envBindings     :: M.Map Name TcBinding
+  , envReturnType   :: Type
+  , envEnumRegistry :: M.Map Name [Name]
+  , envVariantMap   :: M.Map Name Name
   }
   deriving (Eq, Show)
 
 typeCheckContract :: Contract -> Either String ()
 typeCheckContract c = do
   checkDuplicateStorage (contractStorage c)
+  checkDuplicateEnumNames (contractEnums c)
+  checkDuplicateVariants (contractEnums c)
   mapM_ (checkDuplicateParams . methodArgs) (contractMethods c)
   mapM_ (checkMethod c) (contractMethods c)
+
+checkDuplicateEnumNames :: [EnumDecl] -> Either String ()
+checkDuplicateEnumNames decls =
+  let names = [n | EnumDecl n _ <- decls]
+  in if length names == length (nub names)
+       then Right ()
+       else Left "Duplicate enum name in contract."
+
+checkDuplicateVariants :: [EnumDecl] -> Either String ()
+checkDuplicateVariants decls =
+  let allVs = concatMap (\(EnumDecl _ vs) -> vs) decls
+  in if length allVs == length (nub allVs)
+       then Right ()
+       else Left "Duplicate enum variant name (variants must be globally unique within a contract)."
 
 checkDuplicateStorage :: Storage -> Either String ()
 checkDuplicateStorage fields =
@@ -49,18 +67,24 @@ checkDuplicateParams params =
 checkMethod :: Contract -> MethodDecl -> Either String ()
 checkMethod c m =
   let storageT = TRecord (contractStorage c)
-      paramMap =
-        M.fromList
-          [ (n, TcBinding Param t)
-          | FormalParameter n t <- methodArgs m
-          ]
-      env0 =
-        TcEnv
-          { envStorageType = storageT
-          , envBindings = paramMap
-          , envReturnType = methodReturnType m
-          }
-   in void (checkStmt env0 (methodBody m))
+      paramMap = M.fromList
+        [ (n, TcBinding Param t)
+        | FormalParameter n t <- methodArgs m
+        ]
+      env0 = TcEnv
+        { envStorageType  = storageT
+        , envBindings     = paramMap
+        , envReturnType   = methodReturnType m
+        , envEnumRegistry = buildEnumRegistry (contractEnums c)
+        , envVariantMap   = buildVariantMap   (contractEnums c)
+        }
+  in void (checkStmt env0 (methodBody m))
+
+buildEnumRegistry :: [EnumDecl] -> M.Map Name [Name]
+buildEnumRegistry decls = M.fromList [(n, vs) | EnumDecl n vs <- decls]
+
+buildVariantMap :: [EnumDecl] -> M.Map Name Name
+buildVariantMap decls = M.fromList [(v, n) | EnumDecl n vs <- decls, v <- vs]
 
 -- | Check a statement; returns updated environment (bindings from @var@/@val@).
 checkStmt :: TcEnv -> Stmt -> Either String TcEnv
@@ -98,6 +122,47 @@ checkStmt env (WhileStmt cond body) = do
   expectType "while condition" tc TBool
   void (checkStmt env body)
   return env
+checkStmt env (VarDestructStmt n1 n2 t e) = do
+  te <- inferExpr env e
+  expectType ("initializer of var (" ++ n1 ++ ", " ++ n2 ++ ")") te t
+  case t of
+    TPair t1 t2 -> do
+      noDuplicateLocal n1 env
+      noDuplicateLocal n2 env
+      return $ insertLocal n2 LocalMutable t2
+             $ insertLocal n1 LocalMutable t1 env
+    _ -> Left "Destructuring declaration requires a pair<T,U> type annotation."
+checkStmt env (ValDestructStmt n1 n2 t e) = do
+  te <- inferExpr env e
+  expectType ("initializer of val (" ++ n1 ++ ", " ++ n2 ++ ")") te t
+  case t of
+    TPair t1 t2 -> do
+      noDuplicateLocal n1 env
+      noDuplicateLocal n2 env
+      return $ insertLocal n2 LocalImmutable t2
+             $ insertLocal n1 LocalImmutable t1 env
+    _ -> Left "Destructuring declaration requires a pair<T,U> type annotation."
+checkStmt env (MatchStmt e arms) = do
+  te <- inferExpr env e
+  case te of
+    TEnum enumName ->
+      case M.lookup enumName (envEnumRegistry env) of
+        Nothing -> Left $ "Unknown enum type `" ++ enumName ++ "` in match."
+        Just variants -> do
+          let armNames = map fst arms
+          let missing  = filter (`notElem` armNames) variants
+          let extra    = filter (`notElem` variants) armNames
+          unless (null missing) $
+            Left $ "Non-exhaustive match on enum `" ++ enumName
+                ++ "`: missing " ++ show missing ++ "."
+          unless (null extra) $
+            Left $ "Unknown variants in match on enum `" ++ enumName
+                ++ "`: " ++ show extra ++ "."
+          unless (length armNames == length (nub armNames)) $
+            Left "Duplicate arm in match statement."
+          mapM_ (\(_, body) -> void (checkStmt env body)) arms
+          return env
+    _ -> Left "match expression must have an enum type."
 
 noDuplicateLocal :: Name -> TcEnv -> Either String ()
 noDuplicateLocal n env =
@@ -184,6 +249,24 @@ inferExpr env (Gte a b) = inferIntCmp env a b
 inferExpr env (Record pairs) = do
   ts <- mapM (\(k, e) -> (,) k <$> inferExpr env e) pairs
   Right (TRecord [(k, t) | (k, t) <- ts])
+inferExpr env (PairExpr e1 e2) = do
+  t1 <- inferExpr env e1
+  t2 <- inferExpr env e2
+  return (TPair t1 t2)
+inferExpr env (Fst e) = do
+  t <- inferExpr env e
+  case t of
+    TPair t1 _ -> Right t1
+    _ -> Left "fst requires a pair-typed expression."
+inferExpr env (Snd e) = do
+  t <- inferExpr env e
+  case t of
+    TPair _ t2 -> Right t2
+    _ -> Left "snd requires a pair-typed expression."
+inferExpr env (EnumLiteral n) =
+  case M.lookup n (envVariantMap env) of
+    Nothing       -> Left $ "Unknown enum variant `" ++ n ++ "`."
+    Just enumName -> Right (TEnum enumName)
 
 inferBoolBin :: TcEnv -> Expr -> Expr -> Either String Type
 inferBoolBin env a b = do
@@ -238,12 +321,16 @@ typesEqual TUnit TUnit = True
 typesEqual (TRecord as) (TRecord bs) = length as == length bs && and (zipWith fieldEq as bs)
   where
     fieldEq (n1, t1) (n2, t2) = n1 == n2 && typesEqual t1 t2
+typesEqual (TPair a1 b1) (TPair a2 b2) = typesEqual a1 a2 && typesEqual b1 b2
+typesEqual (TEnum n1) (TEnum n2) = n1 == n2
 typesEqual _ _ = False
 
 prettyType :: Type -> String
 prettyType TInt = "int"
 prettyType TBool = "bool"
 prettyType TUnit = "unit"
+prettyType (TPair t u) = "pair<" ++ prettyType t ++ ", " ++ prettyType u ++ ">"
+prettyType (TEnum n) = n
 prettyType (TRecord fs) =
   "{"
     ++ concat
