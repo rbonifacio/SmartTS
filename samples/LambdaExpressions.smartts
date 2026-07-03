@@ -1,0 +1,42 @@
+contract LambdaExpressions {
+  storage: {
+    data: list<int>
+  };
+
+  @originate
+  init(): unit {
+    storage.data = List<int>(10, 20, 30);
+    return ();
+  }
+
+  @entrypoint
+  applyCallbackToEach(): unit {
+    val incrementCallback: (int): unit = (x: int): unit => (x + 1);
+    storage.data.for_each(incrementCallback);
+    return ();
+  }
+
+  @entrypoint
+  sumWithCallback(): int {
+    var accumulator: int = 0;
+    val addToAccumulator: (int): unit = (x: int): unit => {
+      accumulator = accumulator + x;
+    };
+    storage.data.for_each(addToAccumulator);
+    return accumulator;
+  }
+
+  @entrypoint
+  filterAndTransform(): int {
+    var result: int = 0;
+    val processItem: (int): unit = (item: int): unit => {
+      if (item > 15) {
+        result = result + item;
+      } else {
+        result = result;
+      }
+    };
+    storage.data.for_each(processItem);
+    return result;
+  }
+}

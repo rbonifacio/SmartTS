@@ -5,23 +5,23 @@ contract ListOps {
 
   @originate
   init(): unit {
-    storage.xs = list<int>(1, 2, 3);
+    storage.xs = List<int>(1, 2, 3);
     return ();
   }
 
   @entrypoint
   headValue(): int {
-    return storage.xs.head;
+    return storage.xs.head();
   }
 
   @entrypoint
   tailList(): list<int> {
-    return storage.xs.tail;
+    return storage.xs.tail();
   }
 
   @entrypoint
   length(): int {
-    return storage.xs.size;
+    return storage.xs.size();
   }
 
   @entrypoint

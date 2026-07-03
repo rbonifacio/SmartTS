@@ -295,24 +295,6 @@ execStmt rt (WhileStmt cond body) = loop rt
             Just v -> Right (Just v, next)
             Nothing -> loop next
         _ -> interpretBug "while condition was not bool after type check"
-execStmt rt (ForEachStmt varName listExpr body) = do
-  listVal <- evalExpr rt listExpr
-  case listVal of
-    List _ elems -> loop rt elems
-    _ -> interpretBug "forEach iterable was not list after type check"
-  where
-    loop cur [] = Right (Nothing, cur)
-    loop cur (el:rest) = do
-      let bodyRt =
-            cur
-              { rtLocals =
-                  M.insert varName (Binding False el) (rtLocals cur)
-              }
-      (ret, next) <- execStmt bodyRt body
-      let nextNoVar = next {rtLocals = M.delete varName (rtLocals next)}
-      case ret of
-        Just v -> Right (Just v, nextNoVar)
-        Nothing -> loop nextNoVar rest
 
 execSequence :: Runtime -> [Stmt] -> Either String (Maybe Expr, Runtime)
 execSequence rt [] = Right (Nothing, rt)
@@ -351,6 +333,43 @@ evalExpr rt (FieldAccess base fld) = do
         Just v -> Right v
         Nothing -> interpretBug ("missing record field `" ++ fld ++ "` after type check")
     _ -> interpretBug "field access on non-record after type check"
+evalExpr rt (MethodCall obj method args) = do
+  o <- evalExpr rt obj
+  case o of
+    List _ elems -> 
+      case method of
+        "head" -> case elems of
+          (x:_) -> Right x
+          [] -> interpretBug "head called on empty list after type check"
+        "tail" -> case elems of
+          (_:xs) -> Right (List (getListType o) xs)
+          [] -> interpretBug "tail called on empty list after type check"
+        "size" -> Right (CInt (length elems))
+        "cons" -> case args of
+          [arg] -> do
+            v <- evalExpr rt arg
+            Right (List (getListType o) (v:elems))
+          _ -> interpretBug "cons called with wrong number of arguments after type check"
+        "for_each" -> case args of
+          [lambdaExpr] -> do
+            lambda <- evalExpr rt lambdaExpr
+            case (lambda, elems) of
+              (Lambda [FormalParameter pname _] _ body, _) -> do
+                mapM_ (\e -> do
+                  let localBindings' = M.insert pname (Binding True e) (rtLocals rt)
+                      rtWithParam = rt {rtLocals = localBindings'}
+                  evalExpr rtWithParam body
+                  ) elems
+                Right Unit
+              _ -> interpretBug "for_each called with non-lambda or wrong lambda signature after type check"
+          _ -> interpretBug "for_each called with wrong number of arguments after type check"
+        _ -> interpretBug ("unknown list method `" ++ method ++ "` after type check")
+    _ -> interpretBug "method call on non-list after type check"
+  where
+    getListType (List t _) = t
+    getListType _ = interpretBug "getListType called on non-list after type check"
+evalExpr _ (Lambda params retType body) = 
+  Right (Lambda params retType body)
 evalExpr rt (Not e) = do
   v <- evalExpr rt e
   case v of
@@ -375,29 +394,6 @@ evalExpr rt (Lt a b) = intCmp rt a b (<)
 evalExpr rt (Lte a b) = intCmp rt a b (<=)
 evalExpr rt (Gt a b) = intCmp rt a b (>)
 evalExpr rt (Gte a b) = intCmp rt a b (>=)
-evalExpr rt (ListHead e) = do
-  v <- evalExpr rt e
-  case v of
-    List _ [] -> Left "Head of empty list."
-    List _ (x:_) -> Right x
-    _ -> interpretBug "head on non-list after type check"
-evalExpr rt (ListTail e) = do
-  v <- evalExpr rt e
-  case v of
-    List _ [] -> Left "Tail of empty list."
-    List t (_:xs) -> Right (List t xs)
-    _ -> interpretBug "tail on non-list after type check"
-evalExpr rt (ListSize e) = do
-  v <- evalExpr rt e
-  case v of
-    List _ elems -> Right (CInt (length elems))
-    _ -> interpretBug "size on non-list after type check"
-evalExpr rt (ListCons el lst) = do
-  vEl <- evalExpr rt el
-  vLst <- evalExpr rt lst
-  case vLst of
-    List t elems -> Right (List t (vEl : elems))
-    _ -> interpretBug "cons on non-list after type check"
 
 assignLValue :: Runtime -> LValue -> Expr -> Either String Runtime
 assignLValue rt LStorage v = Right rt {rtStorage = Just v}

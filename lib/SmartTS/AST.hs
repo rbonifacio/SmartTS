@@ -56,10 +56,8 @@ data Expr = CInt Int
           | Gte Expr Expr
           | Record [(Name, Expr)]
           | List Type [Expr]
-          | ListHead Expr
-          | ListTail Expr
-          | ListSize Expr
-          | ListCons Expr Expr
+          | MethodCall Expr Name [Expr]
+          | Lambda [FormalParameter] Type Expr -- (parameters, return type, body)
           | Unit
   deriving (Eq, Show)
 
@@ -78,7 +76,6 @@ data Stmt = AssignmentStmt LValue Expr
           | ValDeclStmt Name Type Expr   -- (immutable)
           | IfStmt Expr Stmt (Maybe Stmt)     -- (condition, then, else)
           | WhileStmt Expr Stmt               -- (condition, body)  
-          | ForEachStmt Name Expr Stmt
           | ReturnStmt Expr
           | SequenceStmt [Stmt]
   deriving (Eq, Show)

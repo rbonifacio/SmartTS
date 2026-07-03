@@ -34,12 +34,13 @@ reservedWords =
   , "if"
   , "else"
   , "while"
-  , "forEach"
   , "var"
   , "val"
   , "true"
   , "false"
-  , "list"
+  , "list" -- type
+  , "List" -- constructor
+  -- , "forEach"
   ]
 
 identifier :: Parser String
@@ -115,6 +116,24 @@ parseTerm :: Parser Expr
 parseTerm = do
   base <- parseAtomOrStorage
   parsePostfixes base
+  
+parsePostfixes :: Expr -> Parser Expr
+parsePostfixes term = 
+  (do
+    _ <- symbol "."
+    name <- parseName
+    next <- parseFieldOrMethod term name
+    parsePostfixes next
+  )
+  <|> return term 
+
+parseFieldOrMethod :: Expr -> Name -> Parser Expr
+parseFieldOrMethod term name =
+  (do
+    args <- parens $ sepBy parseExpr (symbol ",")
+    return $ MethodCall term name args
+  )
+  <|> return (FieldAccess term name)
 
 parseAtomOrStorage :: Parser Expr
 parseAtomOrStorage =
@@ -129,31 +148,13 @@ parseAtom =
     <|> parseBool
     <|> parseInt
     <|> parseVar
-    <|> parens parseExpr
+    <|> try (parens parseExpr)
+    <|> parseLambdaExpr
 
 parseStorageExpr :: Parser Expr
 parseStorageExpr = do
   _ <- reserved "storage"
   return StorageExpr
-
-parsePostfixes :: Expr -> Parser Expr
-parsePostfixes term = (do
-  _ <- symbol "."
-  name <- parseName
-  rest <- parseFieldOrMember term name
-  parsePostfixes rest)
-  <|> return term 
-
-parseFieldOrMember :: Expr -> Name -> Parser Expr
-parseFieldOrMember term name =
-  case name of 
-    "head" -> return $ ListHead term
-    "tail" -> return $ ListTail term
-    "size" -> return $ ListSize term
-    "cons" -> do
-      element <- parens parseExpr
-      return $ ListCons element term
-    _ -> return $ FieldAccess term name
 
 parseInt :: Parser Expr
 parseInt = CInt <$> lexeme L.decimal
@@ -171,19 +172,28 @@ parseRecordExpr = do
   fields <- braces $ sepBy parseRecordField (symbol ",")
   return $ Record fields
 
-parseListExpr :: Parser Expr
-parseListExpr = do
-  _ <- reserved "list"
-  t <- angledBrackets parseType
-  elements <- parens $ sepBy parseExpr (symbol ",")
-  return $ List t elements
-
 parseRecordField :: Parser (Name, Expr)
 parseRecordField = do
   name <- parseName
   _ <- symbol ":"
   expr <- parseExpr
   return (name, expr)
+
+parseListExpr :: Parser Expr
+parseListExpr = do
+  _ <- reserved "List"
+  typ <- angledBrackets parseType
+  elements <- parens $ sepBy parseExpr (symbol ",")
+  return $ List typ elements
+
+parseLambdaExpr :: Parser Expr
+parseLambdaExpr = do
+  params <- parseFormalParameters
+  _ <- symbol ":"
+  t <- parseType
+  _ <- symbol "=>"
+  body <- parseExpr
+  return $ Lambda params t body
 
 parseUnit :: Parser Expr
 parseUnit = do
@@ -204,7 +214,6 @@ parseStmt :: Parser Stmt
 parseStmt =
   parseIfStmt
     <|> parseWhileStmt
-    <|> parseForEachStmt
     <|> parseVarDeclStmt
     <|> parseValDeclStmt
     <|> parseReturn
@@ -249,17 +258,6 @@ parseWhileStmt = do
   cond <- parens parseExpr
   body <- parseStmt
   return $ WhileStmt cond body
-
-parseForEachStmt :: Parser Stmt
-parseForEachStmt = do
-  _ <- reserved "forEach"
-  (varName, listExpr) <- parens $ do
-    varName <- parseName
-    _ <- symbol ":"
-    listExpr <- parseExpr
-    return (varName, listExpr)
-  body <- parseStmt
-  return $ ForEachStmt varName listExpr body
 
 parseAssignment :: Parser Stmt
 parseAssignment = do

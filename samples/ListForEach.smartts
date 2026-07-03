@@ -1,23 +1,43 @@
 contract ListForEach {
   storage: {
-    xs: list<int>,
+    items: list<int>,
     sum: int
   };
 
   @originate
   init(): unit {
-    storage.xs = list<int>(1, 2, 3, 4);
+    storage.items = List<int>(1, 2, 3, 4, 5);
     storage.sum = 0;
     return ();
   }
 
   @entrypoint
-  recomputeSum(): int {
-    var acc: int = 0;
-    forEach(e: storage.xs) {
-      acc = acc + e;
-    }
-    storage.sum = acc;
-    return acc;
+  sumAllItems(): int {
+    var total: int = 0;
+    storage.items.for_each((x: int): unit => {
+      total = total + x;
+    });
+    return total;
+  }
+
+  @entrypoint
+  updateStorageSum(): unit {
+    storage.items.for_each((x: int): unit => {
+      storage.sum = storage.sum + x;
+    });
+    return ();
+  }
+
+  @entrypoint
+  countEvenNumbers(): int {
+    var count: int = 0;
+    storage.items.for_each((x: int): unit => {
+      if (x % 2 == 0) {
+        count = count + 1;
+      } else {
+        count = count;
+      }
+    });
+    return count;
   }
 }
