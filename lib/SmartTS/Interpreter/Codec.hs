@@ -7,10 +7,12 @@ import qualified Data.Map.Strict as M
 import Data.Scientific (floatingOrInteger)
 import SmartTS.IR.AST
 import SmartTS.Interpreter.Runtime
+import qualified Data.Text as T
 
 exprToJson :: Expr a -> Value
 exprToJson (CInt _ n) = Number (fromIntegral n)
 exprToJson (CBool _ b) = Bool b
+exprToJson (CString _ s) = String (T.pack s)
 exprToJson (Record _ fields) =
   Object $
     KM.fromList
@@ -26,6 +28,8 @@ jsonToExprByType TInt (Number n) =
     Right i -> Right (CInt TInt i)
     Left _  -> Left "Expected integer number for int type."
 jsonToExprByType TBool (Bool b) = Right (CBool TBool b)
+jsonToExprByType TString (String s) =
+  Right (CString TString (T.unpack s))
 jsonToExprByType (TRecord fieldsT) (Object obj) = do
   pairs <- mapM (decodeField obj) fieldsT
   Right (Record (TRecord fieldsT) pairs)
@@ -44,6 +48,8 @@ jsonToExprUntyped (Number n) =
     Right i -> Right (CInt () i)
     Left _  -> Left "Only integer numbers are currently supported."
 jsonToExprUntyped (Bool b) = Right (CBool () b)
+jsonToExprUntyped (String s) =
+  Right (CString () (T.unpack s))
 jsonToExprUntyped Null = Right (Unit ())
 jsonToExprUntyped (Object obj) = do
   fields <- mapM decodeKV (KM.toList obj)

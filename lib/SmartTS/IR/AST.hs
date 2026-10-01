@@ -28,6 +28,7 @@ type ReturnType = Type
 
 data Type = TInt
           | TBool
+          | TString
           | TUnit
           | TRecord [(Name, Type)]
   deriving (Eq, Show)
@@ -37,6 +38,7 @@ type Name = String
 data Expr a
   = CInt    a Int
   | CBool   a Bool
+  | CString a String
   | StorageExpr a
   | Var     a Name
   | FieldAccess a (Expr a) Name
@@ -63,6 +65,7 @@ data Expr a
 exprAnn :: Expr a -> a
 exprAnn (CInt a _)          = a
 exprAnn (CBool a _)         = a
+exprAnn (CString a _)       = a
 exprAnn (StorageExpr a)     = a
 exprAnn (Var a _)           = a
 exprAnn (FieldAccess a _ _) = a

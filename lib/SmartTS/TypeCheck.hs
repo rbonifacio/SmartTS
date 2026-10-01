@@ -209,6 +209,7 @@ typeOfLValue (LField root fld) = do
 -- | Infer the type of a parsed expression and return the type-annotated version.
 inferExpr :: Expr () -> TcM (Expr Type)
 inferExpr (CInt () n)  = return (CInt TInt n)
+inferExpr (CString () s) = return (CString TString s)
 inferExpr (CBool () b) = return (CBool TBool b)
 inferExpr (Unit ())    = return (Unit TUnit)
 inferExpr (StorageExpr ()) = do
@@ -233,7 +234,13 @@ inferExpr (Not () e) = do
   return (Not TBool te)
 inferExpr (And () a b)  = inferBoolBin (And TBool) a b
 inferExpr (Or () a b)   = inferBoolBin (Or TBool) a b
-inferExpr (Add () a b)  = inferIntBin  (Add TInt) a b
+inferExpr (Add () a b) = do
+  ta <- inferExpr a
+  tb <- inferExpr b
+  case (exprAnn ta, exprAnn tb) of
+    (TString, TString) -> return (Add TString ta tb)
+    (TInt, TInt) -> return (Add TInt ta tb)
+    _ -> tcError "Both operands of + must have the same type (int or string)"
 inferExpr (Sub () a b)  = inferIntBin  (Sub TInt) a b
 inferExpr (Mul () a b)  = inferIntBin  (Mul TInt) a b
 inferExpr (Div () a b)  = inferIntBin  (Div TInt) a b
@@ -248,22 +255,40 @@ inferExpr (Record () pairs) = do
   tpairs <- mapM (\(k, e) -> (,) k <$> inferExpr e) pairs
   let fields = [(k, exprAnn te) | (k, te) <- tpairs]
   return (Record (TRecord fields) tpairs)
-inferExpr (Call () name args) = do
-  env <- get
-  case M.lookup name (envFunctionSignatures env) of
-    Nothing -> tcError $ "Unknown function `" ++ name ++ "`."
-    Just sig -> do
-      let expected = formalArgs sig
-      when (length args /= length expected) $
-        tcError $
-          "Function `" ++ name ++ "` expects " ++ show (length expected)
-            ++ " argument(s) but got " ++ show (length args) ++ "."
-      targs <- mapM inferExpr args
-      zipWithM_
-        (\ta ex -> lift $ expectType ("argument to `" ++ name ++ "`") (exprAnn ta) ex)
-        targs
-        expected
-      return (Call (returnType sig) name targs)
+inferExpr (Call () name args)
+  | name == "length" =
+      case args of
+        [e] -> do
+          te <- inferExpr e
+          lift $ expectType "argument to `length`" (exprAnn te) TString
+          return (Call TInt name [te])
+
+        _ ->
+          tcError "Function `length` expects exactly one argument."
+
+  | otherwise = do
+      env <- get
+      case M.lookup name (envFunctionSignatures env) of
+        Nothing -> tcError $ "Unknown function `" ++ name ++ "`."
+        Just sig -> do
+          let expected = formalArgs sig
+          when (length args /= length expected) $
+            tcError $
+              "Function `" ++ name ++ "` expects "
+                ++ show (length expected)
+                ++ " argument(s) but got "
+                ++ show (length args)
+                ++ "."
+          targs <- mapM inferExpr args
+          zipWithM_
+            (\ta ex ->
+                lift $ expectType
+                  ("argument to `" ++ name ++ "`")
+                  (exprAnn ta)
+                  ex)
+            targs
+            expected
+          return (Call (returnType sig) name targs)
 
 inferBoolBin :: (Expr Type -> Expr Type -> Expr Type) -> Expr () -> Expr () -> TcM (Expr Type)
 inferBoolBin con a b = do
@@ -315,6 +340,7 @@ typesEqual :: Type -> Type -> Bool
 typesEqual TInt  TInt  = True
 typesEqual TBool TBool = True
 typesEqual TUnit TUnit = True
+typesEqual TString TString = True
 typesEqual (TRecord as) (TRecord bs) = length as == length bs && and (zipWith fieldEq as bs)
   where
     fieldEq (n1, t1) (n2, t2) = n1 == n2 && typesEqual t1 t2
@@ -324,6 +350,7 @@ prettyType :: Type -> String
 prettyType TInt  = "int"
 prettyType TBool = "bool"
 prettyType TUnit = "unit"
+prettyType TString = "string"
 prettyType (TRecord fs) =
   "{"
     ++ concat

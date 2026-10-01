@@ -1,0 +1,24 @@
+contract Greeter {
+  storage: {
+    greeting: string,
+    size: int
+  };
+
+  @originate
+  init(greeting: string): unit {
+    storage = { greeting: greeting, size: length(greeting) };
+    return ();
+  }
+
+  @entrypoint
+  greet(name: string): string {
+    storage.greeting = "Hello, " + name + "!";
+    storage.size = length(storage.greeting);
+    return storage.greeting;
+  }
+
+  @entrypoint
+  isGreeting(text: string): bool {
+    return text == storage.greeting;
+  }
+}

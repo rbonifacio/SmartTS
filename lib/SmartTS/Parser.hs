@@ -39,6 +39,8 @@ reservedWords =
   , "val"
   , "true"
   , "false"
+  , "string"
+  , "length"
   ]
 
 identifier :: Parser String
@@ -64,6 +66,7 @@ parseType = parseRecordType <|> parsePrimitiveType
       (reserved "int" >> return TInt)
         <|> (reserved "bool" >> return TBool)
         <|> (reserved "unit" >> return TUnit)
+        <|> (reserved "string" >> return TString)
 
     parseRecordType :: Parser Type
     parseRecordType = do
@@ -121,8 +124,10 @@ parseAtom :: Parser ParsedExpr
 parseAtom =
   parseUnit
     <|> parseRecordExpr
+    <|> parseString
     <|> parseBool
     <|> parseInt
+    <|> parseLength
     <|> parseVarOrCall
     <|> parens parseExpr
 
@@ -133,6 +138,14 @@ parseStorageExpr = do
 
 parseInt :: Parser ParsedExpr
 parseInt = CInt () <$> lexeme L.decimal
+
+-- | The builtin @length(s)@. Since @length@ is a reserved word it cannot be
+-- parsed by 'parseVarOrCall'; arity is checked by the type checker.
+parseLength :: Parser ParsedExpr
+parseLength = do
+  _ <- reserved "length"
+  args <- parens (sepBy parseExpr (symbol ","))
+  return $ Call () "length" args
 
 parseVarOrCall :: Parser ParsedExpr
 parseVarOrCall = do
@@ -146,6 +159,13 @@ parseBool :: Parser ParsedExpr
 parseBool =
   (reserved "true" >> return (CBool () True))
     <|> (reserved "false" >> return (CBool () False))
+
+parseString :: Parser ParsedExpr
+parseString = do
+  _ <- char '"'
+  content <- manyTill L.charLiteral (char '"')
+  spaceConsumer
+  return (CString () content)
 
 parseRecordExpr :: Parser ParsedExpr
 parseRecordExpr = do

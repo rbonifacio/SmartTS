@@ -42,6 +42,9 @@ constInt v ty = L.Expr (L.Const (L.CInt v)) ty
 constBool :: Bool -> L.Type -> L.Expr
 constBool v ty = L.Expr (L.Const (L.CBool v)) ty
 
+constString :: String -> L.Type -> L.Expr
+constString v ty = L.Expr (L.Const (L.CString v)) ty
+
 variable :: String -> L.Type -> L.Expr
 variable name ty = L.Expr (L.Variable (L.Var name)) ty
 

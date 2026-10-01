@@ -7,6 +7,7 @@ import qualified SmartTS.IR.LLTZ.Builder as B
 translateType :: A.Type -> L.Type
 translateType A.TInt             = L.TInt
 translateType A.TBool            = L.TBool
+translateType A.TString          = L.TString
 translateType A.TUnit            = L.TUnit
 translateType (A.TRecord fields) = L.TTuple (L.RowNode (map toLeaf fields))
   where
@@ -16,11 +17,16 @@ translateType (A.TRecord fields) = L.TTuple (L.RowNode (map toLeaf fields))
 translateExpression :: A.TypedExpr -> L.Expr
 translateExpression (A.CInt  ty value) = B.constInt  value (translateType ty)
 translateExpression (A.CBool ty value) = B.constBool value (translateType ty)
+translateExpression (A.CString ty value) = B.constString value (translateType ty)
 translateExpression (A.Var   ty name)  = B.variable  name  (translateType ty)
 -- Boolean Expressions
 translateExpression (A.And ty e1 e2) = translateBinaryExpression e1 e2 ty L.PrimAnd
 translateExpression (A.Or  ty e1 e2) = translateBinaryExpression e1 e2 ty L.PrimOr
 translateExpression (A.Not ty e)     = translateUnaryExpression e ty L.PrimNot
+-- String Expressions
+translateExpression (A.Add ty e1 e2)
+  | ty == A.TString = translateBinaryExpression e1 e2 ty L.PrimConcat2
+translateExpression (A.Call ty "length" [e]) = translateUnaryExpression e ty L.PrimSize
 -- TODO: Write here the translation of the remaining expressions.
 
 -- | Translate a SmartTS block (a list of statements) into a nested LLTZ let-expression.

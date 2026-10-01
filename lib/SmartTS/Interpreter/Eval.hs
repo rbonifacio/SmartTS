@@ -15,6 +15,7 @@ import SmartTS.Interpreter.Runtime
 evalExpr :: TypedExpr -> EvalM TypedExpr
 evalExpr e@(CInt _ _)  = return e
 evalExpr e@(CBool _ _) = return e
+evalExpr e@(CString _ _) = return e
 evalExpr e@(Unit _)    = return e
 evalExpr (StorageExpr _) = do
   rt <- get
@@ -47,7 +48,10 @@ evalExpr (Not _ e) = do
     _         -> interpretBug "operand of ! was not bool after type check"
 evalExpr (And _ a b) = boolBin a b (&&)
 evalExpr (Or  _ a b) = boolBin a b (||)
-evalExpr (Add _ a b) = intBin a b (+)
+evalExpr (Add ty a b) = case ty of
+  TInt -> intBin a b (+)
+  TString -> stringBin a b (++)
+  _ -> interpretBug "Add should only have int or string type"
 evalExpr (Sub _ a b) = intBin a b (-)
 evalExpr (Mul _ a b) = intBin a b (*)
 evalExpr (Div _ a b) = do
@@ -64,23 +68,36 @@ evalExpr (Lt  _ a b) = intCmp a b (<)
 evalExpr (Lte _ a b) = intCmp a b (<=)
 evalExpr (Gt  _ a b) = intCmp a b (>)
 evalExpr (Gte _ a b) = intCmp a b (>=)
-evalExpr (Call _ name args) = do
-  rt <- get
-  m <- case M.lookup name (rtMethods rt) of
-    Nothing  -> interpretBug ("unknown method `" ++ name ++ "` after type check")
-    Just m'  -> return m'
-  argVals <- mapM evalExpr args
-  outerRt <- get
-  let paramNames = [n | FormalParameter n _ <- methodArgs m]
-      params     = M.fromList (zip paramNames argVals)
-      innerRt    = outerRt {rtParams = params, rtLocals = M.empty}
-  (mRet, innerRt') <- lift $ runStateT (execStmt (methodBody m)) innerRt
-  -- Propagate storage mutations from the called method back to the caller.
-  modify $ \r -> r {rtStorage = rtStorage innerRt'}
-  case mRet of
-    Nothing -> interpretBug ("method `" ++ name ++ "` did not return a value after type check")
-    Just v  -> return v
+evalExpr (Call _ name args)
+  | name == "length" =
+      case args of
+        [e] -> do
+          s <- evalString e
+          return (CInt TInt (length s))
 
+        _ ->
+          interpretBug "length arity checked by type checker"
+
+  | otherwise = do
+      rt <- get
+      m <- case M.lookup name (rtMethods rt) of
+        Nothing  -> interpretBug ("unknown method `" ++ name ++ "` after type check")
+        Just m'  -> return m'
+
+      argVals <- mapM evalExpr args
+      outerRt <- get
+      let paramNames = [n | FormalParameter n _ <- methodArgs m]
+          params     = M.fromList (zip paramNames argVals)
+          innerRt    = outerRt {rtParams = params, rtLocals = M.empty}
+
+      (mRet, innerRt') <- lift $ runStateT (execStmt (methodBody m)) innerRt
+
+      modify $ \r -> r {rtStorage = rtStorage innerRt'}
+
+      case mRet of
+        Nothing -> interpretBug ("method `" ++ name ++ "` did not return a value after type check")
+        Just v  -> return v
+        
 -- ---------------------------------------------------------------------------
 -- Statement execution
 -- ---------------------------------------------------------------------------
@@ -228,6 +245,16 @@ evalInt e = do
 
 intBin :: TypedExpr -> TypedExpr -> (Int -> Int -> Int) -> EvalM TypedExpr
 intBin a b op = CInt TInt <$> (op <$> evalInt a <*> evalInt b)
+
+evalString :: TypedExpr -> EvalM String
+evalString e = do
+  v <- evalExpr e
+  case v of
+    CString _ s -> return s
+    _           -> interpretBug "expected string subexpression after type check"
+
+stringBin :: TypedExpr -> TypedExpr -> (String -> String -> String) -> EvalM TypedExpr
+stringBin a b op = CString TString <$> (op <$> evalString a <*> evalString b)
 
 boolBin :: TypedExpr -> TypedExpr -> (Bool -> Bool -> Bool) -> EvalM TypedExpr
 boolBin a b op = do

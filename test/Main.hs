@@ -13,7 +13,7 @@ import SmartTS.Interpreter
   , execMethodWithInitialStorage
   , findEntryPointByName
   )
-import SmartTS.CodeGen.CompileLLTZ (translateStatement)
+import SmartTS.CodeGen.CompileLLTZ (translateExpression, translateStatement)
 import qualified SmartTS.IR.LLTZ.Core as L
 import SmartTS.TypeCheck (typeCheckContract)
 
@@ -35,6 +35,7 @@ tests =
         ]
     , typeCheckTests
     , forLoopTests
+    , stringTests
     ]
 
 -- Helper function to parse and assert success
@@ -104,6 +105,17 @@ storageTests = testGroup "Storage Parsing"
           Contract _ storage _ ->
             assertEqual "Should have 3 storage fields" 3 (length storage)
 
+  , testCase "String literal" $
+    parseSuccess
+      "contract Test { storage: { x: int }; @entrypoint get(): string { return \"hello\"; } }"
+      $ \contract ->
+        case contract of
+          Contract _ _
+            [MethodDecl _ "get" [] TString
+              (SequenceStmt [ReturnStmt (CString () "hello")])]
+              -> return ()
+          _ -> assertFailure $ "Expected string literal, got: " ++ show contract
+  
   , testCase "Storage with single field (no comma)" $
       parseSuccess "contract Test { storage: { x: int }; @originate init(): int { return 0; } }" $ \contract ->
         case contract of
@@ -472,6 +484,18 @@ typeCheckTests =
     , testCase "Arithmetic requires int" $
         typeCheckFailure
           "contract C { storage: { x: int }; @originate init(): int { return 1 + true; } }"
+    , testCase "String variable declaration" $
+      typeCheckSuccess
+        "contract C { storage: { name: string }; @originate init(): unit { var s: string = \"hello\"; return (); } }"
+        
+    , testCase "String return type" $
+        typeCheckSuccess
+          "contract C { storage: { name: string }; @originate init(): string { return \"hello\"; } }"
+
+    , testCase "String type mismatch" $
+        typeCheckFailure
+          "contract C { storage: { name: string }; @originate init(): string { return 42; } }"
+          
     , testCase "Cannot assign to val" $
         typeCheckFailure
           "contract C { storage: { x: int }; @originate init(): int { val v: int = 1; v = 2; return 0; } }"
@@ -505,6 +529,25 @@ typeCheckTests =
               Right (ContractInstance _ st) -> case st of
                 Record _ [("n", CInt _ 1), ("b", CBool _ True)] -> return ()
                 _ -> assertFailure $ "unexpected storage expr: " ++ show st
+    , testCase "String concatenation" $
+        typeCheckSuccess
+          "contract C { storage: {}; @originate init(): string { return \"ab\" + \"cd\"; } }"
+
+    , testCase "Concatenation rejects mixed operands" $
+        typeCheckFailure
+          "contract C { storage: {}; @originate init(): string { return \"a\" + 1; } }"
+
+    , testCase "Length accepts string" $
+        typeCheckSuccess
+          "contract C { storage: { s: string }; @originate init(): int { return length(\"hello\"); } }"
+
+    , testCase "Length rejects int" $
+        typeCheckFailure
+          "contract C { storage: { s: string }; @originate init(): int { return length(123); } }"
+
+    , testCase "Length requires one argument" $
+        typeCheckFailure
+          "contract C { storage: { s: string }; @originate init(): int { return length(\"a\", \"b\"); } }"
     ]
 
 -- | Run an entrypoint of a source contract on the given storage and return its result.
@@ -553,6 +596,42 @@ forLoopTests =
               L.Expr (L.For (L.MutVar "i") (L.Expr (L.Const (L.CInt 0)) L.TInt) _ _ _) L.TUnit ->
                 return ()
               other -> assertFailure $ "Expected an LLTZ For node, got: " ++ show other
+    ]
+
+stringTests :: TestTree
+stringTests =
+  testGroup
+    "Strings"
+    [ testCase "Interpreter concatenates strings and computes length" $
+        case runEntrypoint
+               "contract C { storage: {}; @entrypoint f(): int { val s: string = \"Hello, \" + \"Ana!\"; return length(s); } }"
+               "f"
+               (Record (TRecord []) [])
+          of
+          Right (CInt _ 11) -> return ()
+          other -> assertFailure $ "Expected 11, got: " ++ show other
+    , testCase "Interpreter returns the concatenated string" $
+        case runEntrypoint
+               "contract C { storage: {}; @entrypoint f(): string { return \"ab\" + \"cd\"; } }"
+               "f"
+               (Record (TRecord []) [])
+          of
+          Right (CString _ "abcd") -> return ()
+          other -> assertFailure $ "Expected \"abcd\", got: " ++ show other
+    , testCase "`length` is reserved and cannot name a method" $
+        parseFailure
+          "contract C { storage: {}; @private length(x: int): int { return x; } }"
+    , testCase "`length` is reserved and cannot name a variable" $
+        parseFailure
+          "contract C { storage: {}; @entrypoint f(): int { val length: int = 1; return length; } }"
+    , testCase "Concatenation translates to PrimConcat2" $
+        case translateExpression (Add TString (CString TString "a") (CString TString "b")) of
+          L.Expr (L.Prim L.PrimConcat2 [_, _]) L.TString -> return ()
+          other -> assertFailure $ "Expected PrimConcat2, got: " ++ show other
+    , testCase "length translates to PrimSize" $
+        case translateExpression (Call TInt "length" [CString TString "ab"]) of
+          L.Expr (L.Prim L.PrimSize [_]) L.TInt -> return ()
+          other -> assertFailure $ "Expected PrimSize, got: " ++ show other
     ]
 
 errorTests :: TestTree
