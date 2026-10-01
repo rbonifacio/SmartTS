@@ -64,7 +64,8 @@ library
     exposed-modules:
         MyLib
       , SmartTS.IR.AST
-      , SmartTS.IR.LLTZ
+      , SmartTS.IR.LLTZ.Core
+      , SmartTS.IR.LLTZ.Builder
       , SmartTS.Parser
       , SmartTS.Interpreter
       , SmartTS.TypeCheck

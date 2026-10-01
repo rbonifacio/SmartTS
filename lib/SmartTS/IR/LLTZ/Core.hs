@@ -2,7 +2,7 @@
 
 -- | Haskell translation of the LLTZ intermediate representation.
 --
-module SmartTS.IR.LLTZ where
+module SmartTS.IR.LLTZ.Core where
 
 
 -- ---------------------------------------------------------------------------
