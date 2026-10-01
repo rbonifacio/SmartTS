@@ -1,0 +1,105 @@
+// A small poll: voters choose one of `numOptions` options (0, 1, ...).
+//
+// It exercises most SmartTS features:
+//   - storage records, `val`/`var` declarations and assignments;
+//   - `string` values, concatenation (+) and `length`;
+//   - `map<K, V>`: `empty_map`, `m[k]` reads and writes, `mem` and `remove`;
+//   - `for` and `while` loops, `if`/`else`;
+//   - `@private` helper methods called from entrypoints.
+//
+// SmartTS has no notion of transaction sender yet, so the voter's name is an
+// explicit argument.
+contract Poll {
+  storage: {
+    question: string,
+    numOptions: int,
+    isOpen: bool,
+    votes: map<int, int>,
+    voters: map<string, int>,   // voter -> chosen option
+    status: string
+  };
+
+  @originate
+  init(question: string, numOptions: int): unit {
+    storage = {
+      question: question,
+      numOptions: numOptions,
+      isOpen: length(question) > 0 && numOptions > 1,
+      votes: empty_map,
+      voters: empty_map,
+      status: "created"
+    };
+    // Every option starts with zero votes, so reading votes[i] never fails.
+    for (var i: int = 0; i < numOptions; i = i + 1) {
+      storage.votes[i] = 0;
+    }
+    return ();
+  }
+
+  // Returns true when the vote is accepted.
+  @entrypoint
+  vote(voter: string, option: int): bool {
+    if (canVote(voter, option)) {
+      storage.votes[option] = storage.votes[option] + 1;
+      storage.voters[voter] = option;
+      storage.status = voter + " voted";
+      return true;
+    } else {
+      storage.status = "rejected vote from " + voter;
+      return false;
+    }
+  }
+
+  // A voter may withdraw their vote while the poll is open.
+  @entrypoint
+  withdraw(voter: string): bool {
+    if (storage.isOpen && mem(storage.voters, voter)) {
+      val option: int = storage.voters[voter];
+      storage.votes[option] = storage.votes[option] - 1;
+      storage.voters = remove(storage.voters, voter);
+      storage.status = voter + " withdrew";
+      return true;
+    }
+    return false;
+  }
+
+  @entrypoint
+  close(): int {
+    storage.isOpen = false;
+    storage.status = "closed";
+    return winner();
+  }
+
+  @entrypoint
+  totalVotes(): int {
+    var total: int = 0;
+    var i: int = 0;
+    while (i < storage.numOptions) {
+      total = total + storage.votes[i];
+      i = i + 1;
+    }
+    return total;
+  }
+
+  // The option with the most votes; ties go to the lowest option.
+  @private
+  winner(): int {
+    var best: int = 0;
+    for (var i: int = 1; i < storage.numOptions; i = i + 1) {
+      if (storage.votes[i] > storage.votes[best]) {
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  @private
+  canVote(voter: string, option: int): bool {
+    return storage.isOpen && !mem(storage.voters, voter) && validOption(option);
+  }
+
+  @private
+  validOption(option: int): bool {
+    return option >= 0 && option < storage.numOptions;
+  }
+}

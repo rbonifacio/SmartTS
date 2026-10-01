@@ -1,177 +1,175 @@
-# 9 — SmartTS Evolution Projects
+# 9 — SmartTS Evolution Project
 
-This document proposes ten self-contained extension projects for the SmartTS
-language. Each project touches all three pipeline stages — parser, type
-checker, and interpreter — and requires you to reason carefully about syntax,
-typing rules, and runtime semantics. They are designed to have a similar degree
-of complexity so that any project is a fair choice regardless of which one you
-pick.
+This document proposes a single extension project for the SmartTS language.
+It gathers every feature that is still missing from the original list of
+projects into one coherent roadmap. Each feature touches the whole pipeline —
+parser, type checker, interpreter and LLTZ code generator — and requires you to
+reason carefully about syntax, typing rules, runtime semantics and the
+corresponding Michelson constructs.
 
-## Assignment of the projets to the groups
+## Where we are
 
-The allocation of projects to groups was performed randomly, using a reproducible procedure (i.e., with a fixed random seed). 
+Three of the original projects are already part of `main`. Use them as
+reference implementations: each one shows, in a single commit, every place in
+the pipeline that a new feature must touch.
 
-| Project    | Students |
-|------------|--------|
-| Projeto 1  | Klarissa Morais, Vinícius Moreira<br>Lucas Oliveira|
-| Projeto 2  | Renan Guilherme Siqueira de Araújo<br>Heitor Brayner Prado|
-| Projeto 3  | Pedro Campelo, Danilo Oliveira<br>João Vitor Nascimento, Thomas Alcântara|
-| Projeto 6  | Pedro Casé, Raquel Carneiro<br>Ryei Moraes, Rômulo Filho, Luca Rodrigues|
-| Projeto 7  | Emanoel Thyago Cordeiro dos Santos<br>Abhner Adriel Cristovao Silva<br>Emmanuel Silva Nascimento<br>Davi Vicente Magnata<br>Igor Fragoso Peixoto Lopes de Melo |
-| Projeto 5  | João Marcelo de Souza Motta<br>Thiago Henrique Tomais de Oliveira<br>Vlademir José Montenegro de Melo |
-| Projeto 4  | Juliana Talita<br>João Marrocos<br>Luana Queiroz<br>Pedro Elias<br>Welton Felix |
+| Feature | Commit | What to look at |
+|---------|--------|-----------------|
+| `for` loop | `70dcfe2` | A new statement with its own scope, lowered to LLTZ `For`. |
+| `string` type | `a76f79c` | A new base type, literals, an overloaded operator (`+`) and a reserved builtin (`length`). |
+| `map<K, V>` type | `9924ead` | A parameterised type, a comparability constraint on keys, contextual typing (`empty_map`), a new assignment target (`m[k] = v`) and a JSON encoding. |
 
-   
----
-
-## Project 1 — `nat`, `string`, AND `option<T>` Types
-
-Add two new scalar types: `nat` for non-negative integers (a Michelson
-primitive for token balances) and `string` for text values. Both require only
-new base-type variants in the AST; neither introduces composite structure.
-Add optional values with `Some` and `None` constructors and a dedicated
-`match_option` statement for safe unwrapping. In Michelson, `option` is the
-canonical way to represent missing or nullable values.
-
-### Learning objectives
-- Add two independent base types end-to-end, experiencing how each pipeline stage must be touched even for modest additions.
-- Implement a runtime invariant (`nat` non-negativity) that cannot be verified statically.
-- Relate `nat` to Tezos token balances and `string` to contract metadata and error messages.
-- Implement a polymorphic type constructor — a type that takes a type argument.
-- Understand how pattern matching binds names in a branch-local scope.
-- Appreciate why `option` is preferred over nullable values in statically typed languages.
+The remaining features — `nat`, `option<T>`, `pair<T, U>`, enums, `list<T>`,
+`fail_with`/`require`, `@view` and `@test` — make up the project described below.
 
 ---
 
-## Project 2 — `pair<T, U>` and Enum Types
+## The project — Completing the SmartTS core
 
-Add a two-element product type modelled on Michelson's `Pair`, with a
-constructor expression, `fst`/`snd` accessor builtins, and a destructuring
-declaration form. Add user-defined enumeration types whose variants can be used as values,
-compared for equality, and dispatched on with a `match` statement. Enums are a
-restricted form of Michelson's `or` (sum) type, which encodes the set of
-available entrypoints in a deployed contract.
+The project is organised in three parts. Implement and submit each feature as a
+separate, self-contained pull request (see [Increments](#increments)). The
+concrete syntax below is a suggestion: discuss any change in the Google
+Classroom before implementing it.
+
+### Part A — Types
+
+#### A.1 `nat`
+
+A non-negative integer type, the Michelson primitive for token balances.
+
+- Syntax: the type `nat`; literals written with a suffix, e.g. `5n`.
+- Builtins: `abs(i)` (`int → nat`), `is_nat(i)` (`int → option<nat>`, requires
+  A.2) and `int(n)` (`nat → int`).
+- Typing: arithmetic on two `nat` operands yields `nat`, except subtraction,
+  which yields `int`. Mixing `int` and `nat` without a conversion is a type error.
+- Runtime: non-negativity is an invariant that cannot be checked statically;
+  decoding a negative JSON number into a `nat` must fail.
+- LLTZ: `TNat`, `CNat`, `PrimAbs`, `PrimIsNat` and `PrimCastInt`.
+
+#### A.2 `option<T>` and `match_option`
+
+Optional values, the canonical way to represent a missing value in Michelson.
+
+- Syntax: the type `option<T>`, the constructors `Some(e)` and `None<T>`, and a statement
+
+  ```
+  match_option (e) {
+    Some(x) => { ... }
+    None => { ... }
+  }
+  ```
+
+- Typing: `x` is bound only inside the `Some` branch, with type `T`.
+- Runtime/JSON: `None` is encoded as `null`.
+- LLTZ: `TOption`, `PrimSome`, `PrimNone`, `IfNone` with a `LambdaBinder` for `x`.
+
+#### A.3 `pair<T, U>`
+
+A structural two-element product modelled on Michelson's `Pair`.
+
+- Syntax: the type `pair<T, U>`, the constructor `Pair(a, b)`, the builtins
+  `fst(p)` and `snd(p)`, and a destructuring declaration
+  `val (a, b): pair<int, bool> = p;`, which creates two bindings at once.
+- LLTZ: `TTuple`, `TupleExpr`/`PrimPair`, `Proj` (or `PrimCar`/`PrimCdr`),
+  and `LetTupleIn` for destructuring.
+
+#### A.4 Enums and `match`
+
+User-defined enumerations, a restricted form of Michelson's `or` type.
+
+- Syntax: a contract-level declaration `enum Color { Red, Green, Blue }`,
+  values written `Color.Red`, and a statement
+
+  ```
+  match (c) {
+    Red => { ... }
+    Green => { ... }
+    Blue => { ... }
+  }
+  ```
+
+- Typing: enums are nominal and live in a type registry separate from the
+  symbol table. Variants can be compared with `==`/`!=`. `match` must be
+  exhaustive: a missing or duplicated case is a compile-time error.
+- LLTZ: `TOr` with `unit` leaves, `Inj` for variants and `Match` for dispatch.
+
+#### A.5 `list<T>` and `for_each`
+
+An immutable linked list.
+
+- Syntax: the type `list<T>`, literals `[e1, e2, ...]` (the empty literal `[]`
+  takes its type from the context, as `empty_map` does), the builtins
+  `cons(x, xs)`, `head(xs)` and `tail(xs)`, and a statement
+
+  ```
+  for_each (x in xs) { ... }
+  ```
+
+  Reuse the existing `length` builtin for the size of a list instead of adding
+  a new name: Michelson's `SIZE` already works on strings, lists and maps.
+- Typing: `x` is bound only inside the loop body.
+- Runtime: `head` and `tail` of an empty list cannot be ruled out statically.
+  They are runtime errors (a failure with a payload, see B.1), not internal
+  interpreter bugs.
+- LLTZ: `TList`, `PrimNil`, `PrimCons`, `IfCons` (with `PrimFailwith` on the
+  empty branch), `PrimSize` and `ForEach`.
+
+### Part B — Failures
+
+#### B.1 `fail_with(e)`
+
+An unconditional abort carrying a payload, modelling Michelson's `FAILWITH`.
+
+- Typing: `fail_with` never produces a value, so it is valid in any return-type
+  context (for example, as the only statement of a branch in a method that
+  returns `int`).
+- Runtime: the call fails and the CLI reports the payload encoded as JSON.
+  No storage change is persisted.
+- LLTZ: `PrimFailwith`.
+
+#### B.2 `require(cond, e)`
+
+A conditional guard: `require(c, e)` behaves as `if (!c) { fail_with(e); }`.
+Implement it by desugaring, so that the logic is not duplicated in the type
+checker, interpreter and code generator.
+
+### Part C — Method kinds and tooling
+
+#### C.1 `@view`
+
+Read-only methods, related to Tezos on-chain views.
+
+- Syntax: the decorator `@view`, and a CLI mode
+  `smart-ts --view <name> --repo <dir> --address <KT1...> --args '{}'`.
+- Typing: thread a read-only flag through the type-checker environment. A view
+  must not write to `storage`, neither directly (`storage.x = ...`) nor
+  indirectly by calling a method that writes to it. Combining `@view` with
+  another method decorator is an error.
+- Runtime: the CLI runs the view and never writes `state.json`. `--call` must not
+  run views, and `--view` must not run entrypoints.
+
+#### C.2 `@test`, `assert` and `--test`
+
+First-class tests embedded in contracts.
+
+- Syntax: the decorator `@test`, an `assert(cond)` statement and a CLI mode
+  `smart-ts --test --source <contract.smartts>`.
+- Runtime: `--test` originates the contract in a temporary repository and runs
+  every `@test` method in isolation. Some tests may pass and others fail, and
+  the command prints a human-readable report and exits with a non-zero status if
+  any test fails.
+- LLTZ: test methods and `assert` are not part of the deployed contract. Exclude
+  them from code generation.
 
 
-### Learning objectives
-- Add a parameterised composite type that is structural rather than nominal.
-- Implement destructuring as a declaration that simultaneously creates two bindings.
-- Learn how nominal types are represented in a type registry that is separate from the symbol table.
-- Implement exhaustiveness checking: a missing case is a compile-time error, not a silent fallthrough.
+## Increments
 
----
-## Project 3 — `list<T>` Type
+Submit one pull request per feature (A.1 to C.2). The features are largely
+independent, but a few depend on others:
 
-Add an immutable linked-list type with literal syntax, built-in operations
-(`cons`, `head`, `tail`, `size`), and a `for_each` iteration statement.
-
-### Learning objectives
-- Implement the first collection type, where the element type is a parameter.
-- Understand why `head` and `tail` cannot be made statically safe without tracking list emptiness in the type system (a non-trivial extension beyond this project).
-- Relate `list`, `cons`, and `for_each` to Michelson's `LIST`, `CONS`, and `ITER` instructions.
-
----
-
-## Project 4 — `map<K, V>` Type
-
-Add a finite key–value map type with built-in operations for insertion, lookup,
-removal, and membership testing. Finite maps are a fundamental Tezos data
-structure: Michelson provides both `map` (for small collections) and `big_map`
-(for large, lazily-loaded ones). We will focus only on maps.
-
-### Learning objectives
-- Implement a parameterised collection type whose internal representation uses an ordered map from the host language.
-- Enforce a *comparability* constraint on the key type — a restriction the type checker must check before the interpreter runs.
-- Relate `map<K, V>` to Michelson's `MAP` and `BIG_MAP` types, and understand why Tezos needs both.
-
----
-## Project 5 — `fail_with` and `require`
-
-Add two contract-abortion forms: `fail_with(expr)` (unconditional abort with a
-payload) and `require(condition, expr)` (conditional guard). Both model
-Michelson's `FAILWITH` instruction, which is the primary error-handling
-mechanism in deployed Tezos contracts.
-
-### Learning objectives
-- Implement a statement that is valid in any return-type context — the type-theoretic concept of an expression that never produces a value.
-- Model Tezos's `FAILWITH`, and understand why it carries a payload rather than a simple error code.
-- See how `require` can be desugared at the interpreter level to avoid duplicating logic.
-
----
-
-## Project 6 — `for` Loop
-
-Add a traditional three-part `for` statement as a more expressive alternative
-to `while`, useful for counted iterations common in smart-contract arithmetic.
+- `is_nat` (A.1) returns an `option<nat>`, so it needs A.2.
+- `head`/`tail` of an empty list (A.5) and `require` (B.2) fail through
+  `fail_with` (B.1).
+- `assert` (C.2) can be desugared into `require` (B.2).
 
 
-### Learning objectives
-- Model scoping rules that are tighter than a plain block: the loop variable is out of scope after the `for`.
-- Understand how desugaring a `for` into a `while` can simplify the interpreter at the cost of a less informative AST.
-- Practice adding a new `Stmt` constructor without breaking existing parser and interpreter cases.
-
----
-## Project 7 — `@view` Decorator
-
-Add a `@view` decorator for read-only methods. The type checker enforces that
-`@view` bodies never write to `storage`, making them safe to query without
-altering contract state.
-
-### Learning objectives
-- Understand how a method-level property is enforced by threading a boolean flag through the type-checker environment.
-- See how the same interpreter code can serve two execution modes (mutating and read-only) by varying only the persistence step.
-- Relate `@view` to Tezos on-chain views, which let external contracts read state without triggering a transaction.
-
----
-
-## Project 8 — `@test` Methods and `--test` Mode
-
-Add first-class test declarations using a `@test` decorator, an `assert`
-statement, and a `--test` CLI mode that originates a contract and exercises
-its entrypoints.
-
-### Learning objectives
-- See how a contract language can embed a testing discipline directly in its syntax.
-- Implement a new execution mode that reuses the existing originate and call infrastructure.
-- Handle partial failure — some tests pass, others fail — and produce a human-readable report.
-
----
-
-## Instructions
-
-All projects require changes to the parser, the type checker, and the
-interpreter. A good starting point for any of them is:
-
-1. Write two or three SmartTS contracts that exercise the new feature.
-2. Decide how the concrete syntax of the language will be impacted, and discuss this 
-   using the Google Classroom. 
-3. Decide how the new syntax will be represented as new constructors in `Expr`,
-   `Stmt`, or `Type` in `lib/SmartTS/AST.hs`.
-4. Add the AST nodes and adjust `lib/SmartTS/Parser.hs` to produce them.
-5. Extend `lib/SmartTS/TypeCheck.hs` to validate the new nodes.
-6. Extend `lib/SmartTS/Interpreter.hs` to execute them.
-7. Write unit tests in `test/` and add end-to-end example contracts in
-   `samples/`.
-
-For projects that also touch the CLI (`@view`, `@test`), update `app/Main.hs`
-as well. 
-
-
-## Deadlines
-
-### First Milestone: 
-
-   * Review the concrete syntax (grammar) and the AST and Parser components.
-   * Deadline: 19/04
-   
-### Second Milestone: 
-
-   * Review the implementation of the type checker and interpreter
-   * Deadline: 14/06
-
-### Third Milestone: 
-
-   * Review the implementation of the type code generator
-   * Deadline: 30/06
-
-The outcomes of the projects must be submitted via pull-requests.

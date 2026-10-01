@@ -41,3 +41,6 @@ hpc/
 .DS_Store
 .vscode/
 .idea/
+
+# Local repository created by samples/Poll.md
+poll-repo/
