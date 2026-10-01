@@ -50,7 +50,7 @@ identifier = lexeme $ do
     else return name
 
 reserved :: String -> Parser String
-reserved = symbol
+reserved w = lexeme (try (string w <* notFollowedBy (alphaNumChar <|> char '_')))
 
 -- Types
 parseType :: Parser Type
