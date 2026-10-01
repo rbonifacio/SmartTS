@@ -99,6 +99,7 @@ data Stmt a
   | VarDeclStmt Name Type (Expr a)       -- (mutable)
   | ValDeclStmt Name Type (Expr a)       -- (immutable)
   | IfStmt (Expr a) (Stmt a) (Maybe (Stmt a))   -- (condition, then, else)
+  | ForStmt (Stmt a) (Expr a) (Stmt a) (Stmt a) -- (init, condition, update, body)
   | WhileStmt (Expr a) (Stmt a)                 -- (condition, body)
   | ReturnStmt (Expr a)
   | SequenceStmt [Stmt a]

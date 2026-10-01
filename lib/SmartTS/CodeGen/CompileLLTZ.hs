@@ -72,6 +72,18 @@ translateStatement (A.IfStmt cond s1 (Just s2)) =
 -- Here, the need to a skip statement becomes more clear.
 translateStatement (A.IfStmt cond s1 Nothing) =
   B.ifBool (translateExpression cond) (translateStatement s1) B.skip
+-- Translate the for statement.
+-- The parser only accepts a mutable declaration as the initializer, so the
+-- loop variable and its initial value map directly onto LLTZ's For node.
+-- Like while, the loop produces no value (TUnit).
+translateStatement (A.ForStmt (A.VarDeclStmt name _ty initExpr) cond update block) =
+  B.for name
+    (translateExpression initExpr)
+    (translateExpression cond)
+    (translateStatement update)
+    (translateStatement block)
+translateStatement (A.ForStmt {}) =
+  error "[Impossible] The for initializer must be a var declaration."
 -- Translate the while statement.
 -- The result type is TUnit because Michelson's LOOP instruction does not produce
 -- a value: when the loop exits the stack is in the same state as before the

@@ -15,6 +15,9 @@ assign v e = L.Expr (L.Assign (L.MutVar v) e) L.TUnit
 while :: L.Expr -> L.Expr -> L.Expr
 while c b = L.Expr (L.While c b) L.TUnit
 
+for :: String -> L.Expr -> L.Expr -> L.Expr -> L.Expr -> L.Expr
+for v i c u b = L.Expr (L.For (L.MutVar v) i c u b) L.TUnit
+
 -- ---------------------------------------------------------------------------
 -- Type-propagating expressions (type inferred from sub-expressions)
 -- ---------------------------------------------------------------------------

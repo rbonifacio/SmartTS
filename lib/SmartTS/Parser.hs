@@ -33,6 +33,7 @@ reservedWords =
   , "return"
   , "if"
   , "else"
+  , "for"
   , "while"
   , "var"
   , "val"
@@ -49,8 +50,10 @@ identifier = lexeme $ do
     then fail $ "reserved word: " ++ name
     else return name
 
+-- | Match a keyword as a whole word, so that @for@ does not consume the
+-- prefix of an identifier such as @format@.
 reserved :: String -> Parser String
-reserved = symbol
+reserved w = lexeme (try (string w <* notFollowedBy (alphaNumChar <|> char '_')))
 
 -- Types
 parseType :: Parser Type
@@ -171,6 +174,7 @@ braces = between (symbol "{") (symbol "}")
 parseStmt :: Parser ParsedStmt
 parseStmt =
   parseIfStmt
+    <|> parseForStmt
     <|> parseWhileStmt
     <|> parseVarDeclStmt
     <|> parseValDeclStmt
@@ -179,14 +183,17 @@ parseStmt =
     <|> parseBlock
 
 parseVarDeclStmt :: Parser ParsedStmt
-parseVarDeclStmt = do
+parseVarDeclStmt = parseVarDecl <* symbol ";"
+
+-- | A mutable declaration without the trailing @;@ (also used by @for@).
+parseVarDecl :: Parser ParsedStmt
+parseVarDecl = do
   _ <- reserved "var"
   name <- parseName
   _ <- symbol ":"
   typ <- parseType
   _ <- symbol "="
   expr <- parseExpr
-  _ <- symbol ";"
   return $ VarDeclStmt name typ expr
 
 parseValDeclStmt :: Parser ParsedStmt
@@ -210,6 +217,20 @@ parseIfStmt = do
     parseStmt
   return $ IfStmt cond thenBranch elseBranch
 
+-- | for (var i: int = 0; i < n; i = i + 1) body
+parseForStmt :: Parser ParsedStmt
+parseForStmt = do
+  _ <- reserved "for"
+  _ <- symbol "("
+  initial <- parseVarDecl
+  _ <- symbol ";"
+  cond <- parseExpr
+  _ <- symbol ";"
+  update <- parseAssignmentNoSemi
+  _ <- symbol ")"
+  body <- parseStmt
+  return $ ForStmt initial cond update body
+
 parseWhileStmt :: Parser ParsedStmt
 parseWhileStmt = do
   _ <- reserved "while"
@@ -218,11 +239,14 @@ parseWhileStmt = do
   return $ WhileStmt cond body
 
 parseAssignment :: Parser ParsedStmt
-parseAssignment = do
+parseAssignment = parseAssignmentNoSemi <* symbol ";"
+
+-- | An assignment without the trailing @;@ (also used by @for@).
+parseAssignmentNoSemi :: Parser ParsedStmt
+parseAssignmentNoSemi = do
   target <- parseLValue
   _ <- symbol "="
   expr <- parseExpr
-  _ <- symbol ";"
   return $ AssignmentStmt target expr
 
 parseLValue :: Parser LValue

@@ -7,7 +7,14 @@ import Test.Tasty.HUnit
 import SmartTS.IR.AST
 import SmartTS.Parser
 import Data.Aeson (object, (.=))
-import SmartTS.Interpreter (ContractInstance (..), contractInstanceFromStorageValue)
+import SmartTS.Interpreter
+  ( ContractInstance (..)
+  , contractInstanceFromStorageValue
+  , execMethodWithInitialStorage
+  , findEntryPointByName
+  )
+import SmartTS.CodeGen.CompileLLTZ (translateStatement)
+import qualified SmartTS.IR.LLTZ.Core as L
 import SmartTS.TypeCheck (typeCheckContract)
 
 main :: IO ()
@@ -27,6 +34,7 @@ tests =
         , errorTests
         ]
     , typeCheckTests
+    , forLoopTests
     ]
 
 -- Helper function to parse and assert success
@@ -434,6 +442,18 @@ statementTests = testGroup "Statement Parsing"
             ] ->
               return ()
           _ -> assertFailure $ "Expected local record field assignment, got: " ++ show contract
+  , testCase "For statement" $
+      parseSuccess "contract Test { storage: { x: int }; @entrypoint f(): int { for (var i: int = 0; i < 1; i = i + 1) { x = x + 1; } return x; } }" $ \contract ->
+        case contract of
+          Contract _ _
+            [ MethodDecl _ "f" [] TInt
+                (SequenceStmt
+                  [ ForStmt (VarDeclStmt "i" TInt (CInt _ 0)) (Lt _ (Var _ "i") (CInt _ 1)) (AssignmentStmt (LVar "i") (Add _ (Var _ "i") (CInt _ 1))) (SequenceStmt [AssignmentStmt (LVar "x") (Add _ (Var _ "x") (CInt _ 1))])
+                  , ReturnStmt (Var _ "x")
+                  ])
+            ] ->
+              return ()
+          _ -> assertFailure $ "Expected for statement, got: " ++ show contract
   ]
 
 typeCheckTests :: TestTree
@@ -443,6 +463,9 @@ typeCheckTests =
     [ testCase "Minimal well-typed contract" $
         typeCheckSuccess
           "contract C { storage: { x: int }; @originate init(): int { return 0; } }"
+    , testCase "For loop type checks" $
+        typeCheckSuccess
+          "contract C { storage: { x: int }; @originate init(): int { storage.x = 0; return 0; } @entrypoint inc(): int { for (var i: int = 0; i < 3; i = i + 1) { storage.x = storage.x + 1; } return storage.x; } }"
     , testCase "Return type mismatch" $
         typeCheckFailure
           "contract C { storage: { x: int }; @originate init(): int { return true; } }"
@@ -458,6 +481,15 @@ typeCheckTests =
     , testCase "If condition must be bool" $
         typeCheckFailure
           "contract C { storage: { x: int }; @originate init(): int { if (1) { return 0; } else { return 1; } } }"
+    , testCase "For condition must be bool" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): int { storage.x = 0; return 0; } @entrypoint bad(): int { for (var i: int = 0; i + 1; i = i + 1) { storage.x = storage.x + 1; } return storage.x; } }"
+    , testCase "Loop variable not visible after loop" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): int { storage.x = 0; return 0; } @entrypoint outscope(): int { for (var i: int = 0; i < 1; i = i + 1) { storage.x = storage.x + 1; } return i; } }"
+    , testCase "Shadowing loop init fails" $
+        typeCheckFailure
+          "contract C { storage: { x: int }; @originate init(): int { storage.x = 0; return 0; } @entrypoint shadow(): int { var y: int = 10; for (var y: int = 0; y < 1; y = y + 1) { storage.x = storage.x + 1; } return y; } }"
     , testCase "Storage field assignment matches storage type" $
         typeCheckSuccess
           "contract C { storage: { n: int }; @originate init(): unit { storage.n = 3; return (); } }"
@@ -473,6 +505,54 @@ typeCheckTests =
               Right (ContractInstance _ st) -> case st of
                 Record _ [("n", CInt _ 1), ("b", CBool _ True)] -> return ()
                 _ -> assertFailure $ "unexpected storage expr: " ++ show st
+    ]
+
+-- | Run an entrypoint of a source contract on the given storage and return its result.
+runEntrypoint :: String -> Name -> TypedExpr -> Either String TypedExpr
+runEntrypoint input name storage = do
+  parsed <- either (Left . show) Right (parseContractFromString input)
+  contract <- typeCheckContract parsed
+  method <- findEntryPointByName contract name
+  (ret, _) <- execMethodWithInitialStorage contract storage method mempty
+  maybe (Left "entrypoint returned no value") Right ret
+
+forLoopTests :: TestTree
+forLoopTests =
+  testGroup
+    "For loop"
+    [ testCase "Interpreter sums 1..4 in a for loop" $
+        case runEntrypoint
+               "contract C { storage: {}; @entrypoint f(): int { var s: int = 0; for (var i: int = 1; i <= 4; i = i + 1) { s = s + i; } return s; } }"
+               "f"
+               (Record (TRecord []) [])
+          of
+          Right (CInt _ 10) -> return ()
+          other -> assertFailure $ "Expected 10, got: " ++ show other
+    , testCase "Return inside the body leaves the loop" $
+        case runEntrypoint
+               "contract C { storage: {}; @entrypoint f(): int { for (var i: int = 0; i < 10; i = i + 1) { if (i == 3) { return i; } } return 99; } }"
+               "f"
+               (Record (TRecord []) [])
+          of
+          Right (CInt _ 3) -> return ()
+          other -> assertFailure $ "Expected 3, got: " ++ show other
+    , testCase "Update clause must be an assignment" $
+        parseFailure
+          "contract C { storage: {}; @entrypoint f(): int { for (var i: int = 0; i < 1; var j: int = 0) { } return 0; } }"
+    , testCase "Identifiers starting with `for` are not keywords" $
+        typeCheckSuccess
+          "contract C { storage: {}; @entrypoint f(): int { var format: int = 1; format = format + 1; return format; } }"
+    , testCase "For translates to an LLTZ For node" $
+        let loop =
+              ForStmt
+                (VarDeclStmt "i" TInt (CInt TInt 0))
+                (Lt TBool (Var TInt "i") (CInt TInt 3))
+                (AssignmentStmt (LVar "i") (Add TInt (Var TInt "i") (CInt TInt 1)))
+                (SequenceStmt [])
+         in case translateStatement loop of
+              L.Expr (L.For (L.MutVar "i") (L.Expr (L.Const (L.CInt 0)) L.TInt) _ _ _) L.TUnit ->
+                return ()
+              other -> assertFailure $ "Expected an LLTZ For node, got: " ++ show other
     ]
 
 errorTests :: TestTree

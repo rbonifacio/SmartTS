@@ -1,0 +1,24 @@
+contract Fatorial {
+    storage: {
+        resultado: int,
+        ultimoNumero: int
+    };
+
+    @originate
+    init(): unit {
+        storage.resultado = 1;
+        storage.ultimoNumero = 0;
+        return ();
+    }
+
+    @entrypoint
+    calcularFatorial(n: int): int {
+        storage.resultado = 1;
+        for (var i: int = 1; i <= n; i = i + 1) {
+            storage.resultado = storage.resultado * i;
+        }
+        
+        storage.ultimoNumero = n;
+        return storage.resultado;
+    }
+}

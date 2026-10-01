@@ -109,6 +109,20 @@ execStmt (IfStmt cond thenS elseS) = do
         Nothing -> return Nothing
         Just es -> execStmt es
     _ -> interpretBug "if condition was not bool after type check"
+execStmt (ForStmt initS cond update body) = do
+  _ <- execStmt initS
+  loop
+  where
+    loop = do
+      c <- evalExpr cond
+      case c of
+        CBool _ False -> return Nothing
+        CBool _ True -> do
+          ret <- execStmt body
+          case ret of
+            Just v  -> return (Just v)
+            Nothing -> execStmt update >> loop
+        _ -> interpretBug "for condition was not bool after type check"
 execStmt (WhileStmt cond body) = loop
   where
     loop = do

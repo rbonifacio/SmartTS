@@ -140,6 +140,16 @@ checkStmt (IfStmt cond thn mel) = do
     Nothing  -> return Nothing
     Just els -> Just <$> withSavedEnv (checkStmt els)
   return (IfStmt tc tthn tmel)
+-- The whole loop runs in a saved environment, so the loop variable declared
+-- by the initializer is not visible after the for statement.
+checkStmt (ForStmt initS cond update body) =
+  withSavedEnv $ do
+    tinit <- checkStmt initS
+    tc <- inferExpr cond
+    lift $ expectType "for condition" (exprAnn tc) TBool
+    tbody <- withSavedEnv (checkStmt body)
+    tupdate <- withSavedEnv (checkStmt update)
+    return (ForStmt tinit tc tupdate tbody)
 checkStmt (WhileStmt cond body) = do
   tc <- inferExpr cond
   lift $ expectType "while condition" (exprAnn tc) TBool
