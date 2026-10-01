@@ -50,3 +50,9 @@ variable name ty = L.Expr (L.Variable (L.Var name)) ty
 
 prim :: L.Primitive -> [L.Expr] -> L.Type -> L.Expr
 prim p args ty = L.Expr (L.Prim p args) ty
+
+some :: L.Expr -> L.Expr
+some e = prim L.PrimSome [e] (L.TOption (L.exprType e))
+
+none :: L.Type -> L.Expr
+none ty = prim (L.PrimNone ty) [] (L.TOption ty)

@@ -3,6 +3,7 @@ module SmartTS.CodeGen.CompileLLTZ where
 import qualified SmartTS.IR.AST          as A
 import qualified SmartTS.IR.LLTZ.Core    as L
 import qualified SmartTS.IR.LLTZ.Builder as B
+import qualified Data.Map.Strict         as M
 
 translateType :: A.Type -> L.Type
 translateType A.TInt             = L.TInt
@@ -12,6 +13,7 @@ translateType A.TUnit            = L.TUnit
 translateType (A.TRecord fields) = L.TTuple (L.RowNode (map toLeaf fields))
   where
     toLeaf (name, ty) = L.RowLeaf (Just (L.Label name)) (translateType ty)
+translateType (A.TMap k v)       = L.TMap (translateType k) (translateType v)
 
 -- Basic Expressions
 translateExpression :: A.TypedExpr -> L.Expr
@@ -27,6 +29,30 @@ translateExpression (A.Not ty e)     = translateUnaryExpression e ty L.PrimNot
 translateExpression (A.Add ty e1 e2)
   | ty == A.TString = translateBinaryExpression e1 e2 ty L.PrimConcat2
 translateExpression (A.Call ty "length" [e]) = translateUnaryExpression e ty L.PrimSize
+-- Map Expressions
+translateExpression (A.MapEmpty ty) =
+  case translateType ty of
+    lt@(L.TMap k v) -> B.prim (L.PrimEmptyMap k v) [] lt
+    _ -> error "[Impossible] empty_map with a non-map type after type check."
+-- Map literals only exist as runtime values; they are built by successive updates.
+translateExpression (A.MapVal ty entries) =
+  case translateType ty of
+    lt@(L.TMap k v) ->
+      foldr
+        (\(key, val) acc ->
+          B.prim L.PrimUpdate [translateExpression key, B.some (translateExpression val), acc] lt)
+        (B.prim (L.PrimEmptyMap k v) [] lt)
+        (M.toList entries)
+    _ -> error "[Impossible] map value with a non-map type after type check."
+translateExpression (A.MapMemCheck ty mapExpr key) =
+  B.prim L.PrimMem [translateExpression key, translateExpression mapExpr] (translateType ty)
+translateExpression (A.MapRem ty mapExpr key) =
+  case translateType ty of
+    lt@(L.TMap _ v) ->
+      B.prim L.PrimUpdate [translateExpression key, B.none v, translateExpression mapExpr] lt
+    _ -> error "[Impossible] remove with a non-map type after type check."
+translateExpression (A.MapAccess ty mapExpr key) =
+  mapGet (translateExpression mapExpr) (translateExpression key) (translateType ty)
 -- TODO: Write here the translation of the remaining expressions.
 
 -- | Translate a SmartTS block (a list of statements) into a nested LLTZ let-expression.
@@ -58,10 +84,9 @@ translateBlock (s:ss) =
 
 -- | Translate a single SmartTS statement into an LLTZ expression.
 translateStatement :: A.TypedStmt -> L.Expr
--- Translate the variable assignment statement.
--- TODO: Deal with the remaining LValues (storage and record field).
-translateStatement (A.AssignmentStmt (A.LVar name) expr) =
-  B.assign name (translateExpression expr)
+-- Translate the assignment statement.
+translateStatement (A.AssignmentStmt lv expr) =
+  translateAssignment lv (translateExpression expr)
 -- Translate the if-then-else statement.
 translateStatement (A.IfStmt cond s1 (Just s2)) =
   let cond' = translateExpression cond
@@ -101,6 +126,38 @@ translateStatement (A.WhileStmt cond block) =
 translateStatement (A.ReturnStmt expr) = translateExpression expr
 -- Translate a nested block of statements.
 translateStatement (A.SequenceStmt stmts) = translateBlock stmts
+
+-- Auxiliary functions for translating assignments.
+
+-- | Assign a value to an LValue. A map update @m[k] = v@ becomes the
+-- assignment of @UPDATE k (Some v) m@ to @m@, recursively for nested maps.
+-- TODO: Deal with the remaining LValues (storage and record field).
+translateAssignment :: A.TypedLValue -> L.Expr -> L.Expr
+translateAssignment (A.LVar name) value = B.assign name value
+translateAssignment (A.LMapAccess lv key) value =
+  let key'  = translateExpression key
+      mapTy = L.TMap (L.exprType key') (L.exprType value)
+      updated = B.prim L.PrimUpdate [key', B.some value, readLValue lv mapTy] mapTy
+  in translateAssignment lv updated
+translateAssignment _ _ =
+  error "Code generation for assignments to storage and record fields is not supported yet."
+
+-- | Read the current value of an LValue whose type is known from the context.
+readLValue :: A.TypedLValue -> L.Type -> L.Expr
+readLValue (A.LVar name) ty = B.variable name ty
+readLValue (A.LMapAccess lv key) ty =
+  let key' = translateExpression key
+  in mapGet (readLValue lv (L.TMap (L.exprType key') ty)) key' ty
+readLValue _ _ =
+  error "Code generation for reads of storage and record fields is not supported yet."
+
+-- | Look up a key in a map, failing with MAP_ACCESS_KEY_NOT_FOUND when it is absent.
+mapGet :: L.Expr -> L.Expr -> L.Type -> L.Expr
+mapGet mapExpr key valTy =
+  let found   = B.prim L.PrimGet [key, mapExpr] (L.TOption valTy)
+      failure = B.prim L.PrimFailwith [B.constString "MAP_ACCESS_KEY_NOT_FOUND" L.TString] valTy
+      binder  = L.LambdaBinder (L.Var "__value", valTy) (B.variable "__value" valTy)
+  in L.Expr (L.IfNone found failure binder) valTy
 
 -- Auxiliary functions for translating expressions.
 

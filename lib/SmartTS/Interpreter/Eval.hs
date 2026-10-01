@@ -97,7 +97,30 @@ evalExpr (Call _ name args)
       case mRet of
         Nothing -> interpretBug ("method `" ++ name ++ "` did not return a value after type check")
         Just v  -> return v
-        
+evalExpr (MapVal ty m) = return (MapVal ty m)
+evalExpr (MapEmpty ty) = return (MapVal ty M.empty)
+evalExpr (MapAccess _ base key) = do
+  baseVal <- evalExpr base
+  keyVal <- evalExpr key
+  case baseVal of
+    MapVal _ m ->
+      case M.lookup keyVal m of
+        Just v  -> return v
+        Nothing -> lift (Left "Runtime Error: Key not found in map.")
+    _ -> interpretBug "map access on non-map after type check"
+evalExpr (MapMemCheck _ base key) = do
+  baseVal <- evalExpr base
+  keyVal <- evalExpr key
+  case baseVal of
+    MapVal _ m -> return (CBool TBool (M.member keyVal m))
+    _ -> interpretBug "mem check on non-map after type check"
+evalExpr (MapRem _ base key) = do
+  baseVal <- evalExpr base
+  keyVal <- evalExpr key
+  case baseVal of
+    MapVal ty m -> return (MapVal ty (M.delete keyVal m))
+    _ -> interpretBug "map remove on non-map after type check"
+
 -- ---------------------------------------------------------------------------
 -- Statement execution
 -- ---------------------------------------------------------------------------
@@ -165,7 +188,7 @@ execSequence (s : ss) = do
 -- LValue assignment helpers
 -- ---------------------------------------------------------------------------
 
-assignLValue :: LValue -> TypedExpr -> EvalM ()
+assignLValue :: TypedLValue -> TypedExpr -> EvalM ()
 assignLValue LStorage v =
   modify $ \rt -> rt {rtStorage = Just v}
 assignLValue (LVar n) v = do
@@ -185,13 +208,26 @@ assignLValue (LField lv fld) v = do
   rootExpr <- lift $ resolveRootExpr rt root
   updated  <- lift $ setFieldPath rootExpr path v
   assignLValue root updated
+assignLValue (LMapAccess lv key) v = do
+  keyVal <- evalExpr key
+  baseVal <- evalExpr (lValueToExpr lv)
+  case baseVal of
+    MapVal ty m -> assignLValue lv (MapVal ty (M.insert keyVal v m))
+    _ -> interpretBug "map assignment on non-map after type check"
 
-flattenLValue :: LValue -> [Name] -> (LValue, [Name])
+lValueToExpr :: TypedLValue -> TypedExpr
+lValueToExpr LStorage = StorageExpr TUnit
+lValueToExpr (LVar name) = Var TUnit name
+lValueToExpr (LField lv name) = FieldAccess TUnit (lValueToExpr lv) name
+lValueToExpr (LMapAccess lv key) = MapAccess TUnit (lValueToExpr lv) key
+
+flattenLValue :: TypedLValue -> [Name] -> (TypedLValue, [Name])
 flattenLValue LStorage      acc = (LStorage, acc)
 flattenLValue (LVar n)      acc = (LVar n, acc)
 flattenLValue (LField p fld) acc = flattenLValue p (fld : acc)
+flattenLValue (LMapAccess _ _) _ = error "Map updates must be handled by assignLValue directly, not flattened."
 
-resolveRootExpr :: Runtime -> LValue -> Either String TypedExpr
+resolveRootExpr :: Runtime -> TypedLValue -> Either String TypedExpr
 resolveRootExpr rt LStorage =
   case rtStorage rt of
     Nothing -> Right (Record (TRecord []) [])

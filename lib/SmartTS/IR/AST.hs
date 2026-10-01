@@ -1,5 +1,7 @@
 module SmartTS.IR.AST where
 
+import qualified Data.Map.Strict as M
+
 data Contract a = Contract {
   contractName :: Name,
   contractStorage :: Storage,
@@ -31,7 +33,8 @@ data Type = TInt
           | TString
           | TUnit
           | TRecord [(Name, Type)]
-  deriving (Eq, Show)
+          | TMap Type Type
+  deriving (Eq, Show, Ord)
 
 type Name = String
 
@@ -59,7 +62,12 @@ data Expr a
   | Record  a [(Name, Expr a)]
   | Unit    a
   | Call    a Name [Expr a]
-  deriving (Eq, Show)
+  | MapEmpty a
+  | MapAccess a (Expr a) (Expr a)
+  | MapMemCheck a (Expr a) (Expr a)
+  | MapRem a (Expr a) (Expr a)
+  | MapVal a (M.Map (Expr a) (Expr a))
+  deriving (Eq, Show, Ord)
 
 -- | Extract the annotation from any expression node.
 exprAnn :: Expr a -> a
@@ -86,19 +94,26 @@ exprAnn (Gte a _ _)         = a
 exprAnn (Record a _)        = a
 exprAnn (Unit a)            = a
 exprAnn (Call a _ _)        = a
+exprAnn (MapEmpty a)        = a
+exprAnn (MapAccess a _ _)   = a
+exprAnn (MapMemCheck a _ _) = a
+exprAnn (MapRem a _ _)      = a
+exprAnn (MapVal a _)        = a
 
 type MethodBody a = Stmt a
 
 -- | What is allowed on the left-hand side of an assignment.
--- Supports TypeScript-like record field paths: `x.a.b`.
-data LValue
+-- Supports TypeScript-like record field paths: `x.a.b`
+-- and map index assignment: `x[k]`.
+data LValue a
   = LStorage
   | LVar Name
-  | LField LValue Name
+  | LField (LValue a) Name
+  | LMapAccess (LValue a) (Expr a)
   deriving (Eq, Show)
 
 data Stmt a
-  = AssignmentStmt LValue (Expr a)
+  = AssignmentStmt (LValue a) (Expr a)
   | VarDeclStmt Name Type (Expr a)       -- (mutable)
   | ValDeclStmt Name Type (Expr a)       -- (immutable)
   | IfStmt (Expr a) (Stmt a) (Maybe (Stmt a))   -- (condition, then, else)
@@ -113,6 +128,8 @@ type ParsedExpr     = Expr ()
 type TypedExpr      = Expr Type
 type ParsedStmt     = Stmt ()
 type TypedStmt      = Stmt Type
+type ParsedLValue   = LValue ()
+type TypedLValue    = LValue Type
 type ParsedContract = Contract ()
 type TypedContract  = Contract Type
 

@@ -41,6 +41,10 @@ reservedWords =
   , "false"
   , "string"
   , "length"
+  , "map"
+  , "empty_map"
+  , "mem"
+  , "remove"
   ]
 
 identifier :: Parser String
@@ -59,7 +63,7 @@ reserved w = lexeme (try (string w <* notFollowedBy (alphaNumChar <|> char '_'))
 
 -- Types
 parseType :: Parser Type
-parseType = parseRecordType <|> parsePrimitiveType
+parseType = parseMapType <|> parseRecordType <|> parsePrimitiveType
   where
     parsePrimitiveType :: Parser Type
     parsePrimitiveType =
@@ -79,6 +83,16 @@ parseType = parseRecordType <|> parsePrimitiveType
       _ <- symbol ":"
       typ <- parseType
       return (name, typ)
+
+    parseMapType :: Parser Type
+    parseMapType = do
+      _ <- reserved "map"
+      _ <- symbol "<"
+      kTyp <- parseType
+      _ <- symbol ","
+      vTyp <- parseType
+      _ <- symbol ">"
+      return $ TMap kTyp vTyp
 
 -- Names
 parseName :: Parser Name
@@ -109,11 +123,23 @@ operators =
   , [ InfixL (Or () <$ symbol "||") ]
   ]
 
+-- | A postfix accessor: a record field (@.f@) or a map key (@[k]@).
+-- Shared by expressions and assignment targets.
+data Accessor = AccField Name | AccMap ParsedExpr
+
+parseAccessor :: Parser Accessor
+parseAccessor =
+      (AccField <$> (symbol "." *> parseName))
+  <|> (AccMap   <$> (symbol "[" *> parseExpr <* symbol "]"))
+
 parseTerm :: Parser ParsedExpr
 parseTerm = do
   base <- parseAtomOrStorage
-  fields <- many (symbol "." *> parseName)
-  return (foldl (\e f -> FieldAccess () e f) base fields)
+  accessors <- many parseAccessor
+  return $ foldl applyAccessor base accessors
+  where
+    applyAccessor b (AccField f) = FieldAccess () b f
+    applyAccessor b (AccMap e)   = MapAccess () b e
 
 parseAtomOrStorage :: Parser ParsedExpr
 parseAtomOrStorage =
@@ -125,6 +151,9 @@ parseAtom =
   parseUnit
     <|> parseRecordExpr
     <|> parseString
+    <|> (reserved "empty_map" >> return (MapEmpty ()))
+    <|> parseMapMem
+    <|> parseMapRemove
     <|> parseBool
     <|> parseInt
     <|> parseLength
@@ -269,13 +298,16 @@ parseAssignmentNoSemi = do
   expr <- parseExpr
   return $ AssignmentStmt target expr
 
-parseLValue :: Parser LValue
+parseLValue :: Parser ParsedLValue
 parseLValue = do
   base <- parseAssignableBase
-  fields <- many (symbol "." *> parseName)
-  return (foldl LField base fields)
+  accessors <- many parseAccessor
+  return $ foldl applyAccessor base accessors
+  where
+    applyAccessor b (AccField f) = LField b f
+    applyAccessor b (AccMap e)   = LMapAccess b e
 
-parseAssignableBase :: Parser LValue
+parseAssignableBase :: Parser ParsedLValue
 parseAssignableBase =
   (reserved "storage" >> return LStorage) <|> (LVar <$> parseName)
 
@@ -309,6 +341,26 @@ parseStorageField = do
   _ <- symbol ":"
   typ <- parseType
   return (name, typ)
+
+parseMapMem :: Parser ParsedExpr
+parseMapMem = do
+  _ <- reserved "mem"
+  _ <- symbol "("
+  mapExpr <- parseExpr
+  _ <- symbol ","
+  keyExpr <- parseExpr
+  _ <- symbol ")"
+  return $ MapMemCheck () mapExpr keyExpr
+
+parseMapRemove :: Parser ParsedExpr
+parseMapRemove = do
+  _ <- reserved "remove"
+  _ <- symbol "("
+  mapExpr <- parseExpr
+  _ <- symbol ","
+  keyExpr <- parseExpr
+  _ <- symbol ")"
+  return $ MapRem () mapExpr keyExpr
 
 -- Method decorators
 parseMethodKind :: Parser MethodKind

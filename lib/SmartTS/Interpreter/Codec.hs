@@ -5,6 +5,7 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as M
 import Data.Scientific (floatingOrInteger)
+import qualified Data.Vector as V
 import SmartTS.IR.AST
 import SmartTS.Interpreter.Runtime
 import qualified Data.Text as T
@@ -20,6 +21,16 @@ exprToJson (Record _ fields) =
       | (k, v) <- fields
       ]
 exprToJson (Unit _) = Null
+exprToJson (MapVal _ m) =
+  Array $
+    V.fromList
+      [ Object $
+          KM.fromList
+            [ (fromStringKey "key", exprToJson k)
+            , (fromStringKey "value", exprToJson v)
+            ]
+      | (k, v) <- M.toList m
+      ]
 exprToJson _ = Null
 
 jsonToExprByType :: Type -> Value -> Either String TypedExpr
@@ -40,6 +51,21 @@ jsonToExprByType (TRecord fieldsT) (Object obj) = do
         Just v  -> do
           ev <- jsonToExprByType ftype v
           Right (fname, ev)
+jsonToExprByType (TMap k v) (Array entries) = do
+  pairs <- mapM decodeEntry (V.toList entries)
+  Right (MapVal (TMap k v) (M.fromList pairs))
+  where
+    decodeEntry (Object o) = do
+      keyJson <- case KM.lookup (fromStringKey "key") o of
+        Nothing -> Left "Map entry is missing the \"key\" field."
+        Just kv -> Right kv
+      valJson <- case KM.lookup (fromStringKey "value") o of
+        Nothing -> Left "Map entry is missing the \"value\" field."
+        Just vv -> Right vv
+      ek <- jsonToExprByType k keyJson
+      ev <- jsonToExprByType v valJson
+      Right (ek, ev)
+    decodeEntry _ = Left "Map entry must be a JSON object with \"key\" and \"value\" fields."
 jsonToExprByType _ _ = Left "JSON value does not match the expected SmartTS type."
 
 jsonToExprUntyped :: Value -> Either String ParsedExpr
